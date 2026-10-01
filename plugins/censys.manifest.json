@@ -1,0 +1,201 @@
+{
+  "identifier": "run.vineyard.pluginpacks.censys",
+  "content_type": "vineyard:pluginpack",
+  "name": "Censys (under testing, for research purpose)",
+  "version": "0.1.0",
+  "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. Censys Platform lookups with the analyst's own token: the TLS certificates and SSH host keys an IP presents, and the other hosts that present the same certificate or key. Desktop only.",
+  "author": {
+    "name": "VINEYARD",
+    "url": "https://vineyard.run"
+  },
+  "license": "Apache-2.0",
+  "icon": "scan-line",
+  "platforms": {
+    "primary": "desktop",
+    "web": {
+      "runtime": "sandbox-js",
+      "entry": "dist/pack.mjs"
+    },
+    "desktop": {
+      "runtime": "sandbox-js",
+      "entry": "dist/pack.mjs",
+      "min_app_version": "0.1.0"
+    }
+  },
+  "plugins": [
+    {
+      "identifier": "run.vineyard.plugins.censys_host",
+      "content_type": "vineyard:plugin",
+      "name": "Censys Host (under testing, for research purpose)",
+      "version": "0.1.0",
+      "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. For each selected IP Address, looks the host up on Censys and adds the TLS certificates ('presents certificate') and SSH host keys ('presents host key') its services present, and lists the open services on the IP. 1 credit per IP (a free Censys account has 100 a month). Desktop only.",
+      "icon": "server",
+      "platforms": {
+        "primary": "desktop",
+        "web": {
+          "runtime": "sandbox-js",
+          "entry": "dist/pack.mjs"
+        },
+        "desktop": {
+          "runtime": "sandbox-js",
+          "entry": "dist/pack.mjs",
+          "min_app_version": "0.1.0"
+        }
+      },
+      "io": {
+        "consumes": [
+          {
+            "typepack": "run.vineyard.typepacks.infrastructure",
+            "category": "infrastructure",
+            "name": "ip_address"
+          }
+        ],
+        "produces": [
+          {
+            "typepack": "run.vineyard.typepacks.infrastructure",
+            "category": "infrastructure",
+            "name": "certificate"
+          },
+          {
+            "typepack": "run.vineyard.typepacks.infrastructure",
+            "category": "infrastructure",
+            "name": "ssh_host_key"
+          }
+        ]
+      },
+      "scopes": {
+        "graph": [
+          "node:read",
+          "node:create",
+          "node:update",
+          "edge:create"
+        ],
+        "network": [
+          {
+            "endpoint": "https://api.platform.censys.io/v3/global",
+            "methods": [
+              "GET",
+              "POST"
+            ],
+            "purpose": "Censys Platform host lookups and searches — the analyst's own token via the Authorization header."
+          }
+        ],
+        "config": [
+          {
+            "key": "api_key",
+            "label": "Censys Personal Access Token",
+            "type": "string",
+            "secret": true,
+            "optional": false
+          },
+          {
+            "key": "organization_id",
+            "label": "Censys Organization ID (optional)",
+            "type": "string",
+            "optional": true
+          }
+        ]
+      },
+      "lifecycle": {
+        "persistence": "opt-in",
+        "controls": [
+          "progress",
+          "cancel"
+        ],
+        "progress": "determinate"
+      }
+    },
+    {
+      "identifier": "run.vineyard.plugins.censys_pivot",
+      "content_type": "vineyard:plugin",
+      "name": "Censys Pivot (under testing, for research purpose)",
+      "version": "0.1.0",
+      "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. For each selected TLS Certificate or SSH Host Key, searches Censys for the hosts that present it and links each one's IP Address. The total Censys found is recorded on the node as censys_host_count, so a key shared by thousands of hosts (a device default) is visible as such. Needs a paid Censys account (Starter or higher); each search costs credits. Desktop only.",
+      "icon": "route",
+      "platforms": {
+        "primary": "desktop",
+        "web": {
+          "runtime": "sandbox-js",
+          "entry": "dist/pack.mjs"
+        },
+        "desktop": {
+          "runtime": "sandbox-js",
+          "entry": "dist/pack.mjs",
+          "min_app_version": "0.1.0"
+        }
+      },
+      "params": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "title": "Hosts per certificate or key",
+            "description": "At most this many IP addresses are added per selected node (1–100, default 25)."
+          }
+        }
+      },
+      "io": {
+        "consumes": [
+          {
+            "typepack": "run.vineyard.typepacks.infrastructure",
+            "category": "infrastructure",
+            "name": "certificate"
+          },
+          {
+            "typepack": "run.vineyard.typepacks.infrastructure",
+            "category": "infrastructure",
+            "name": "ssh_host_key"
+          }
+        ],
+        "produces": [
+          {
+            "typepack": "run.vineyard.typepacks.infrastructure",
+            "category": "infrastructure",
+            "name": "ip_address"
+          }
+        ]
+      },
+      "scopes": {
+        "graph": [
+          "node:read",
+          "node:create",
+          "node:update",
+          "edge:create"
+        ],
+        "network": [
+          {
+            "endpoint": "https://api.platform.censys.io/v3/global",
+            "methods": [
+              "GET",
+              "POST"
+            ],
+            "purpose": "Censys Platform host lookups and searches — the analyst's own token via the Authorization header."
+          }
+        ],
+        "config": [
+          {
+            "key": "api_key",
+            "label": "Censys Personal Access Token",
+            "type": "string",
+            "secret": true,
+            "optional": false
+          },
+          {
+            "key": "organization_id",
+            "label": "Censys Organization ID (optional)",
+            "type": "string",
+            "optional": true
+          }
+        ]
+      },
+      "lifecycle": {
+        "persistence": "opt-in",
+        "controls": [
+          "progress",
+          "cancel"
+        ],
+        "progress": "determinate"
+      }
+    }
+  ]
+}
