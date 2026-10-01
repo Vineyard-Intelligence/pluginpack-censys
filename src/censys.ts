@@ -32,7 +32,7 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const RESEARCH_NOTE =
     'Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
@@ -199,7 +199,7 @@ export const censysHostLookup = definePlugin({
     manifest: {
         identifier: 'run.vineyard.plugins.censys_host_lookup',
         content_type: 'vineyard:plugin',
-        name: 'Censys Host Lookup (under testing, for research purpose)',
+        name: 'Censys Host Lookup',
         version: VERSION,
         description: `${RESEARCH_NOTE} For each selected IP Address, looks the host up on Censys and adds the TLS certificates ('presents certificate') and SSH host keys ('presents host key') its services present, and lists the open services on the IP. 1 credit per IP (a free Censys account has 100 a month). Desktop only.`,
         icon: 'server',
@@ -289,7 +289,7 @@ export const censysSearch = definePlugin({
     manifest: {
         identifier: 'run.vineyard.plugins.censys_search',
         content_type: 'vineyard:plugin',
-        name: 'Censys Search (under testing, for research purpose)',
+        name: 'Censys Search',
         version: VERSION,
         description: `${RESEARCH_NOTE} Searches Censys two ways. For each selected TLS Certificate or SSH Host Key it finds the hosts presenting it, links their IP Addresses, and records the total as censys_host_count — so a key shared by thousands of hosts (a device default) shows as such. A CenQL query typed in the Run dialog adds what it matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Needs a paid Censys account (Starter or higher, with its organization ID); each search costs credits. Desktop only.`,
         icon: 'search',

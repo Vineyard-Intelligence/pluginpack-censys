@@ -2,7 +2,7 @@
   "identifier": "run.vineyard.pluginpacks.censys",
   "content_type": "vineyard:pluginpack",
   "name": "Censys (under testing, for research purpose)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. Censys Platform host lookup and search with the analyst's own token: the TLS certificates and SSH host keys an IP presents, the other hosts presenting the same certificate or key, and free CenQL queries. Desktop only.",
   "author": {
     "name": "VINEYARD",
@@ -26,8 +26,8 @@
     {
       "identifier": "run.vineyard.plugins.censys_host_lookup",
       "content_type": "vineyard:plugin",
-      "name": "Censys Host Lookup (under testing, for research purpose)",
-      "version": "0.2.0",
+      "name": "Censys Host Lookup",
+      "version": "0.2.1",
       "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. For each selected IP Address, looks the host up on Censys and adds the TLS certificates ('presents certificate') and SSH host keys ('presents host key') its services present, and lists the open services on the IP. 1 credit per IP (a free Censys account has 100 a month). Desktop only.",
       "icon": "server",
       "platforms": {
@@ -108,8 +108,8 @@
     {
       "identifier": "run.vineyard.plugins.censys_search",
       "content_type": "vineyard:plugin",
-      "name": "Censys Search (under testing, for research purpose)",
-      "version": "0.2.0",
+      "name": "Censys Search",
+      "version": "0.2.1",
       "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. Searches Censys two ways. For each selected TLS Certificate or SSH Host Key it finds the hosts presenting it, links their IP Addresses, and records the total as censys_host_count — so a key shared by thousands of hosts (a device default) shows as such. A CenQL query typed in the Run dialog adds what it matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Needs a paid Censys account (Starter or higher, with its organization ID); each search costs credits. Desktop only.",
       "icon": "search",
       "platforms": {
