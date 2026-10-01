@@ -32,9 +32,9 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.2.1';
+const VERSION = '0.2.2';
 const RESEARCH_NOTE =
-    'Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon.';
+    'Temporary plugin pack added by the VINEYARD operator for thesis research. Under testing — it may be removed soon.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
 const PLATFORMS: PluginManifest['platforms'] = {
@@ -201,7 +201,8 @@ export const censysHostLookup = definePlugin({
         content_type: 'vineyard:plugin',
         name: 'Censys Host Lookup',
         version: VERSION,
-        description: `${RESEARCH_NOTE} For each selected IP Address, looks the host up on Censys and adds the TLS certificates ('presents certificate') and SSH host keys ('presents host key') its services present, and lists the open services on the IP. 1 credit per IP (a free Censys account has 100 a month). Desktop only.`,
+        description:
+            "Looks up each selected IP Address on Censys and adds what its services present: TLS certificates (with subject CN, issuer, serial and validity) linked by 'presents certificate', and SSH host keys (identified by the SHA-256 of the key) linked by 'presents host key'. Also lists the IP's open ports and protocols as censys_services. Use it to learn which certificate or SSH key a server exposes, for example before searching for other hosts that share it. Costs 1 Censys credit per IP; works on a free Censys account. Desktop only.",
         icon: 'server',
         platforms: PLATFORMS,
         io: {
@@ -291,7 +292,8 @@ export const censysSearch = definePlugin({
         content_type: 'vineyard:plugin',
         name: 'Censys Search',
         version: VERSION,
-        description: `${RESEARCH_NOTE} Searches Censys two ways. For each selected TLS Certificate or SSH Host Key it finds the hosts presenting it, links their IP Addresses, and records the total as censys_host_count — so a key shared by thousands of hosts (a device default) shows as such. A CenQL query typed in the Run dialog adds what it matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Needs a paid Censys account (Starter or higher, with its organization ID); each search costs credits. Desktop only.`,
+        description:
+            "Searches Censys for hosts, two ways. With TLS Certificate or SSH Host Key nodes selected, it finds every host presenting that certificate or key, adds their IP Addresses linked by 'presents certificate' / 'presents host key', and records the total number of matching hosts on the node as censys_host_count (thousands usually means a shared device default, not one operator). With a Censys Query Language (CenQL) query in the Run dialog, e.g. host.services.cert.parsed.subject.common_name=\"example.com\", it adds what the query matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Needs a paid Censys account (Starter or higher) and its organization ID; each search costs credits. Desktop only.",
         icon: 'search',
         platforms: PLATFORMS,
         params: {
@@ -464,7 +466,7 @@ const pack: VineyardPluginPack & {
     content_type: 'vineyard:pluginpack',
     name: 'Censys (under testing, for research purpose)',
     version: VERSION,
-    description: `${RESEARCH_NOTE} Censys Platform host lookup and search with the analyst's own token: the TLS certificates and SSH host keys an IP presents, the other hosts presenting the same certificate or key, and free CenQL queries. Desktop only.`,
+    description: `Censys Platform lookups and searches with the analyst's own Personal Access Token: the TLS certificates, SSH host keys and open services an IP presents, the other hosts presenting the same certificate or SSH key, and free Censys Query Language (CenQL) searches. Desktop only. ${RESEARCH_NOTE}`,
     author: { name: 'VINEYARD', url: 'https://vineyard.run' },
     license: 'Apache-2.0',
     icon: 'scan-line',
