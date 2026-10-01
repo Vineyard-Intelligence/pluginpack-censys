@@ -2,8 +2,8 @@
   "identifier": "run.vineyard.pluginpacks.censys",
   "content_type": "vineyard:pluginpack",
   "name": "Censys (under testing, for research purpose)",
-  "version": "0.1.0",
-  "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. Censys Platform lookups with the analyst's own token: the TLS certificates and SSH host keys an IP presents, and the other hosts that present the same certificate or key. Desktop only.",
+  "version": "0.2.0",
+  "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. Censys Platform host lookup and search with the analyst's own token: the TLS certificates and SSH host keys an IP presents, the other hosts presenting the same certificate or key, and free CenQL queries. Desktop only.",
   "author": {
     "name": "VINEYARD",
     "url": "https://vineyard.run"
@@ -24,10 +24,10 @@
   },
   "plugins": [
     {
-      "identifier": "run.vineyard.plugins.censys_host",
+      "identifier": "run.vineyard.plugins.censys_host_lookup",
       "content_type": "vineyard:plugin",
-      "name": "Censys Host (under testing, for research purpose)",
-      "version": "0.1.0",
+      "name": "Censys Host Lookup (under testing, for research purpose)",
+      "version": "0.2.0",
       "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. For each selected IP Address, looks the host up on Censys and adds the TLS certificates ('presents certificate') and SSH host keys ('presents host key') its services present, and lists the open services on the IP. 1 credit per IP (a free Censys account has 100 a month). Desktop only.",
       "icon": "server",
       "platforms": {
@@ -106,12 +106,12 @@
       }
     },
     {
-      "identifier": "run.vineyard.plugins.censys_pivot",
+      "identifier": "run.vineyard.plugins.censys_search",
       "content_type": "vineyard:plugin",
-      "name": "Censys Pivot (under testing, for research purpose)",
-      "version": "0.1.0",
-      "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. For each selected TLS Certificate or SSH Host Key, searches Censys for the hosts that present it and links each one's IP Address. The total Censys found is recorded on the node as censys_host_count, so a key shared by thousands of hosts (a device default) is visible as such. Needs a paid Censys account (Starter or higher); each search costs credits. Desktop only.",
-      "icon": "route",
+      "name": "Censys Search (under testing, for research purpose)",
+      "version": "0.2.0",
+      "description": "Temporary plugin added by the VINEYARD operator for thesis research. Under testing — it may be removed soon. Searches Censys two ways. For each selected TLS Certificate or SSH Host Key it finds the hosts presenting it, links their IP Addresses, and records the total as censys_host_count — so a key shared by thousands of hosts (a device default) shows as such. A CenQL query typed in the Run dialog adds what it matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Needs a paid Censys account (Starter or higher, with its organization ID); each search costs credits. Desktop only.",
+      "icon": "search",
       "platforms": {
         "primary": "desktop",
         "web": {
@@ -127,15 +127,26 @@
       "params": {
         "type": "object",
         "properties": {
+          "query": {
+            "type": "string",
+            "title": "CenQL query",
+            "description": "Optional. e.g. host.services.cert.parsed.subject.common_name=\"example.com\". Runs in addition to any selected certificates or SSH host keys."
+          },
           "limit": {
             "type": "integer",
-            "title": "Hosts per certificate or key",
-            "description": "At most this many IP addresses are added per selected node (1–100, default 25)."
+            "title": "Results per search",
+            "description": "At most this many results are added per search (1–100, default 25)."
           }
         }
       },
       "io": {
-        "consumes": [
+        "consumes": [],
+        "produces": [
+          {
+            "typepack": "run.vineyard.typepacks.infrastructure",
+            "category": "infrastructure",
+            "name": "ip_address"
+          },
           {
             "typepack": "run.vineyard.typepacks.infrastructure",
             "category": "infrastructure",
@@ -144,14 +155,7 @@
           {
             "typepack": "run.vineyard.typepacks.infrastructure",
             "category": "infrastructure",
-            "name": "ssh_host_key"
-          }
-        ],
-        "produces": [
-          {
-            "typepack": "run.vineyard.typepacks.infrastructure",
-            "category": "infrastructure",
-            "name": "ip_address"
+            "name": "domain"
           }
         ]
       },
