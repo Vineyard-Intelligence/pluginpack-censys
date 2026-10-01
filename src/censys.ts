@@ -32,7 +32,7 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.2.2';
+const VERSION = '0.2.3';
 const RESEARCH_NOTE =
     'Temporary plugin pack added by the VINEYARD operator for thesis research. Under testing — it may be removed soon.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
@@ -46,7 +46,7 @@ const NET_SCOPE: NetworkScope[] = [
     {
         endpoint: API,
         methods: ['GET', 'POST'],
-        purpose: "Censys Platform host lookups and searches — the analyst's own token via the Authorization header.",
+        purpose: 'Look up hosts and run searches on Censys.',
     },
 ];
 const CONFIG: ConfigValue[] = [
@@ -303,12 +303,13 @@ export const censysSearch = definePlugin({
                     type: 'string',
                     title: 'CenQL query',
                     description:
-                        'Optional. e.g. host.services.cert.parsed.subject.common_name="example.com". Runs in addition to any selected certificates or SSH host keys.',
+                        'A Censys Query Language query, e.g. host.services.cert.parsed.subject.common_name="example.com". Runs alongside any selected certificates or SSH host keys; leave empty to search only those.',
                 },
                 limit: {
                     type: 'integer',
                     title: 'Results per search',
-                    description: 'At most this many results are added per search (1–100, default 25).',
+                    description:
+                        'Maximum results added per search (the query, and each selected certificate or SSH host key). 1–100, default 25.',
                 },
             },
         },
