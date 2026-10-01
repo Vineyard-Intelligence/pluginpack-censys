@@ -3,19 +3,22 @@
 > **Temporary.** This pack was added by the VINEYARD operator for thesis research. It is under
 > testing and may be removed soon — do not build workflows that depend on it.
 
-Censys Platform lookups for [VINEYARD](https://vineyard.run), using your own Censys Personal
-Access Token: the TLS certificates and SSH host keys an IP presents, and the other hosts that
-present the same certificate or key.
+Censys Platform host lookup and search for [VINEYARD](https://vineyard.run), using your own
+Censys Personal Access Token: the TLS certificates and SSH host keys an IP presents, the other
+hosts presenting the same certificate or key, and free CenQL queries.
 
 ## Plugins
 
-| Plugin | Selected nodes | Adds | Censys account |
+| Plugin | Input | Adds | Censys account |
 |---|---|---|---|
-| **Censys Host** | IP Address | TLS Certificate (`presents certificate`), SSH Host Key (`presents host key`), and the IP's open services as `censys_services` | Free works — 1 credit per IP (100 credits a month on a free account) |
-| **Censys Pivot** | TLS Certificate, SSH Host Key | IP Address of each host presenting it (up to 100 per node, default 25); the total Censys found as `censys_host_count` | Paid (Starter or higher) — search is not available to free accounts; each search costs credits |
+| **Censys Host Lookup** | selected IP Addresses | TLS Certificate (`presents certificate`), SSH Host Key (`presents host key`), and the IP's open services as `censys_services` | Free works — 1 credit per IP (100 credits a month on a free account) |
+| **Censys Search** | selected TLS Certificates / SSH Host Keys, and/or a CenQL query typed in the Run dialog | For a certificate or key: the IP Address of each host presenting it, and the total Censys found as `censys_host_count`. For a query: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Up to 100 results per search (default 25) | Paid (Starter or higher) with its organization ID — a free account is refused ("requires an organization ID"); each search costs credits |
 
 A large `censys_host_count` usually means a shared or default certificate/key (an appliance
 image, a hosting panel), not one operator's infrastructure.
+
+Censys records one host key per SSH service — the one its scanner negotiated (often ECDSA) — so
+a server's RSA or Ed25519 key seen by another source will not match it.
 
 ## Setup
 
@@ -24,7 +27,7 @@ image, a hosting panel), not one operator's infrastructure.
 2. In VINEYARD, open **Run plugins**, pick a Censys plugin, and fill in its settings:
    - **Censys Personal Access Token** (required)
    - **Censys Organization ID** (optional) — set it to bill an organization's credits; leave it
-     empty to use your free account.
+     empty to use your free account (host lookup only).
 
 **Desktop app only.** Censys sends no CORS headers, so the web build cannot read its responses.
 

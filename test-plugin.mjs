@@ -2,11 +2,11 @@
 // Run: node test-plugin.mjs
 //
 // Responses follow the shapes in the Censys Platform API reference (v3 global data): host lookup
-// `result.resource.services[]`, search `result.{total_hits, hits[].host_v1.resource}`. No live key
-// was used.
+// `result.resource.services[]`, search `result.{total_hits, hits[].host_v1.resource}`. A live run on
+// a free account (2026-10-01) matched them for host lookup; search answered 403 there, as tested.
 import pack from "./dist/pack.mjs";
 
-const [hostPlugin, pivotPlugin] = pack.plugins;
+const [hostPlugin, searchPlugin] = pack.plugins;
 const ok = [];
 const fail = [];
 const check = (name, cond) => (cond ? ok : fail).push(name);
@@ -98,6 +98,7 @@ const hostBody = {
               subject: { common_name: ["origin.example.com"] },
               issuer_dn: "C=US, O=CloudFlare, Inc., OU=CloudFlare Origin SSL Certificate Authority",
               serial_number: "1234567890",
+              serial_number_hex: "499602d2",
               validity_period: { not_before: "2026-01-01T00:00:00Z", not_after: "2041-01-01T00:00:00Z" },
             },
           },
@@ -122,7 +123,7 @@ const hostBody = {
   },
 };
 
-// ---- censys_host ---------------------------------------------------------------------------
+// ---- censys_host_lookup ---------------------------------------------------------------------------
 {
   const { ctx } = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body: {} }), platform: "web" });
   ctx.input.selection = ["ip1"];
@@ -145,7 +146,7 @@ const hostBody = {
   const certs = t.graph.createdNodes.filter((n) => n.type === "infrastructure.certificate");
   check("one certificate across two ports", certs.length === 1);
   check("certificate fingerprint lowercased", certs[0]?.data.fingerprint_sha256 === CERT_FP.toLowerCase());
-  check("certificate CN/issuer/validity", certs[0]?.data.subject_common_name === "origin.example.com" && /CloudFlare Origin/.test(certs[0]?.data.issuer) && certs[0]?.data.not_after === "2041-01-01T00:00:00Z");
+  check("certificate CN/issuer/validity", certs[0]?.data.subject_common_name === "origin.example.com" && /CloudFlare Origin/.test(certs[0]?.data.issuer) && certs[0]?.data.not_after === "2041-01-01T00:00:00Z" && certs[0]?.data.serial_number === "499602d2");
   const keys = t.graph.createdNodes.filter((n) => n.type === "infrastructure.ssh_host_key");
   check("two valid host keys, bad one skipped", keys.length === 2);
   check("ed25519 key type", keys.find((k) => k.data.fingerprint_sha256 === ED_FP)?.data.key_type === "ssh-ed25519");
@@ -187,7 +188,7 @@ const hostBody = {
   check("429 is retried", t.net.calls.length === 2 && res.counts.checked === 1);
 }
 
-// ---- censys_pivot --------------------------------------------------------------------------
+// ---- censys_search --------------------------------------------------------------------------
 const certNode = { id: "c1", type: "infrastructure.certificate", data: { fingerprint_sha256: CERT_FP } };
 const keyNode = { id: "k1", type: "infrastructure.ssh_host_key", data: { fingerprint_sha256: ED_FP } };
 const searchBody = {
@@ -203,7 +204,7 @@ const searchBody = {
 };
 {
   const t = ctxFor({ nodes: { c1: certNode, k1: keyNode }, selection: ["c1", "k1"], respond: () => ({ status: 200, body: searchBody }), params: { limit: 5 } });
-  const res = await pivotPlugin.run(t.ctx);
+  const res = await searchPlugin.run(t.ctx);
   const [c, k] = t.net.calls;
   const cb = JSON.parse(c.init.body);
   const kb = JSON.parse(k.init.body);
@@ -219,18 +220,49 @@ const searchBody = {
 }
 {
   const t = ctxFor({ nodes: { c1: certNode }, selection: ["c1"], respond: () => ({ status: 200, body: { result: { total_hits: 0, hits: [] } } }), params: { limit: 999 } });
-  await pivotPlugin.run(t.ctx);
+  await searchPlugin.run(t.ctx);
   check("limit clamps to 100", JSON.parse(t.net.calls[0].init.body).page_size === 100);
   const d = ctxFor({ nodes: { c1: certNode }, selection: ["c1"], respond: () => ({ status: 200, body: { result: { total_hits: 0, hits: [] } } }) });
-  await pivotPlugin.run(d.ctx);
+  await searchPlugin.run(d.ctx);
   check("default limit 25", JSON.parse(d.net.calls[0].init.body).page_size === 25);
 }
 {
   const t = ctxFor({ nodes: { c1: certNode, k1: keyNode }, selection: ["c1", "k1"], respond: () => ({ status: 403, body: { error: { message: "Forbidden" } } }) });
-  const err = await pivotPlugin.run(t.ctx).catch((e) => e);
+  const err = await searchPlugin.run(t.ctx).catch((e) => e);
   check("403 on search ends the run with the tier reason", err instanceof Error && /paid account/.test(err.message) && t.net.calls.length === 1);
 }
 
+{
+  const body = {
+    result: {
+      total_hits: 3,
+      hits: [
+        { host_v1: { resource: { ip: "203.0.113.9" } } },
+        { certificate_v1: { resource: { fingerprint_sha256: CERT_FP, parsed: { subject: { common_name: ["a.example"] } } } } },
+        { webproperty_v1: { resource: { hostname: "Shop.Example.com", port: 443 } } },
+        { webproperty_v1: { resource: { hostname: "198.51.100.20", port: 8443 } } },
+      ],
+    },
+  };
+  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body }), params: { query: '  host.services.port=8443  ' } });
+  const res = await searchPlugin.run(t.ctx);
+  check("query runs with no selection", JSON.parse(t.net.calls[0].init.body).query === "host.services.port=8443");
+  const types = t.graph.createdNodes.map((n) => `${n.type}:${JSON.stringify(n.data).slice(0, 40)}`);
+  check("host hit -> IP", t.graph.createdNodes.some((n) => n.type === "infrastructure.ip_address" && n.data.ip_address === "203.0.113.9"));
+  check("certificate hit -> certificate", t.graph.createdNodes.some((n) => n.type === "infrastructure.certificate" && n.data.subject_common_name === "a.example"));
+  check("web property hostname -> lowercased domain", t.graph.createdNodes.some((n) => n.type === "infrastructure.domain" && n.data.domain_name === "shop.example.com"));
+  check("web property IP hostname -> IP", t.graph.createdNodes.some((n) => n.type === "infrastructure.ip_address" && n.data.ip_address === "198.51.100.20"));
+  check("query adds no edges", t.graph.createdEdges.length === 0);
+  check("query summary", res.counts.hosts === 2 && res.counts.certificates === 1 && res.counts.domains === 1);
+}
+{
+  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body: {} }) });
+  const res = await searchPlugin.run(t.ctx);
+  check("nothing to search returns guidance without a request", t.net.calls.length === 0 && /CenQL query/.test(res.summary));
+  const q = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 422, body: { error: { message: "invalid query" } } }), params: { query: "host.(" } });
+  const err = await searchPlugin.run(q.ctx).catch((e) => e);
+  check("a rejected query ends the run with Censys' reason", err instanceof Error && /rejected the query — invalid query/.test(err.message));
+}
 for (const n of ok) console.log(`  ok   ${n}`);
 for (const n of fail) console.log(`  FAIL ${n}`);
 console.log(fail.length ? `\n${fail.length} FAILED` : `\nall ${ok.length} checks passed`);
