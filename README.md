@@ -1,7 +1,7 @@
-# Censys (under testing, for research purpose)
+# Censys (under testing)
 
-> **Temporary.** This pack was added by the VINEYARD operator for thesis research. It is under
-> testing and may be removed soon — do not build workflows that depend on it.
+> **Temporary.** This pack is under testing and may change or be removed — do not build workflows
+> that depend on it.
 
 Censys Platform host lookup and search for [VINEYARD](https://vineyard.run), using your own
 Censys Personal Access Token: the TLS certificates and SSH host keys an IP presents, the other

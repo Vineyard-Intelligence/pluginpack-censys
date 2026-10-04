@@ -1,7 +1,6 @@
-// Censys (under testing, for research purpose) — Censys Platform API host lookup and search for VINEYARD.
+// Censys (under testing) — Censys Platform API host lookup and search for VINEYARD.
 //
-// TEMPORARY: added by the VINEYARD operator for thesis research (identifying origin servers from
-// the TLS certificates and SSH host keys they expose). It may be removed without notice.
+// TEMPORARY: under testing, and it may change or be removed without notice.
 //
 // KEY MODEL: the analyst's own Censys Personal Access Token, sent as `Authorization: Bearer` to
 // api.platform.censys.io through the manifest's `network` allowlist. An organization ID is
@@ -32,9 +31,8 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.2.3';
-const RESEARCH_NOTE =
-    'Temporary plugin pack added by the VINEYARD operator for thesis research. Under testing — it may be removed soon.';
+const VERSION = '0.2.4';
+const TESTING_NOTE = 'Temporary plugin pack under testing — it may change or be removed.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
 const PLATFORMS: PluginManifest['platforms'] = {
@@ -465,9 +463,9 @@ const pack: VineyardPluginPack & {
 } = {
     identifier: 'run.vineyard.pluginpacks.censys',
     content_type: 'vineyard:pluginpack',
-    name: 'Censys (under testing, for research purpose)',
+    name: 'Censys (under testing)',
     version: VERSION,
-    description: `Censys Platform lookups and searches with the analyst's own Personal Access Token: the TLS certificates, SSH host keys and open services an IP presents, the other hosts presenting the same certificate or SSH key, and free Censys Query Language (CenQL) searches. Desktop only. ${RESEARCH_NOTE}`,
+    description: `Censys Platform lookups and searches with the analyst's own Personal Access Token: the TLS certificates, SSH host keys and open services an IP presents, the other hosts presenting the same certificate or SSH key, and free Censys Query Language (CenQL) searches. Desktop only. ${TESTING_NOTE}`,
     author: { name: 'VINEYARD', url: 'https://vineyard.run' },
     license: 'Apache-2.0',
     icon: 'scan-line',
