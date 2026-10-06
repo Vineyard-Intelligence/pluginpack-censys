@@ -11,7 +11,7 @@ hosts presenting the same certificate or key, and free CenQL queries.
 
 | Plugin | Input | Adds | Censys account |
 |---|---|---|---|
-| **Censys Host Lookup** | selected IP Addresses | TLS Certificate (`presents certificate`), SSH Host Key (`presents host key`), and the IP's open services as `censys_services` | Free works — 1 credit per IP (100 credits a month on a free account) |
+| **Censys Host Lookup** | selected IP Addresses | TLS Certificate (`presents certificate`) with `san_count`, the domain names it lists as Domains (`names domain`; none when it lists more than 25 — a CDN or shared-hosting certificate), SSH Host Key (`presents host key`), and the IP's open services as `censys_services` | Free works — 1 credit per IP (100 credits a month on a free account) |
 | **Censys Search** | selected TLS Certificates / SSH Host Keys, and/or a CenQL query typed in the Run dialog | For a certificate or key: the IP Address of each host presenting it, and the total Censys found as `censys_host_count`. For a query: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Up to 100 results per search (default 25) | Paid (Starter or higher) with its organization ID — a free account is refused ("requires an organization ID"); each search costs credits |
 
 A large `censys_host_count` usually means a shared or default certificate/key (an appliance
