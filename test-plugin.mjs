@@ -188,6 +188,81 @@ const hostBody = {
   check("429 is retried", t.net.calls.length === 2 && res.counts.checked === 1);
 }
 
+{
+  // Certificate names. Censys parses the SAN extension into
+  // cert.parsed.extensions.subject_alt_name.dns_names, and lists CN + SANs as cert.names
+  // (host.services.cert.names in CenQL).
+  const sharedNames = Array.from({ length: 30 }, (_, i) => `tenant${i}.example`);
+  const body = {
+    result: {
+      resource: {
+        ip: "198.51.100.8",
+        services: [
+          {
+            port: 443,
+            protocol: "HTTP",
+            cert: {
+              fingerprint_sha256: "11".repeat(32),
+              names: ["example.com", "origin.example.com", "*.example.com"],
+              parsed: {
+                subject: { common_name: ["example.com"] },
+                extensions: { subject_alt_name: { dns_names: ["origin.example.com", "*.example.com", "Example.com", "localhost", "nas.local"] } },
+              },
+            },
+          },
+          {
+            port: 8443,
+            protocol: "HTTP",
+            cert: { fingerprint_sha256: "22".repeat(32), parsed: { extensions: { subject_alt_name: { dns_names: sharedNames } } } },
+          },
+          { port: 9443, protocol: "HTTP", cert: { fingerprint_sha256: "33".repeat(32), names: ["fallback.example.net"] } },
+        ],
+      },
+    },
+  };
+  const t = ctxFor({
+    nodes: { ip1: { id: "ip1", type: "infrastructure.ip_address", data: { ip_address: "198.51.100.8" } } },
+    selection: ["ip1"],
+    respond: () => ({ status: 200, body }),
+  });
+  const res = await hostPlugin.run(t.ctx);
+  const nodeById = new Map(t.graph.createdNodes.map((n) => [n.id, n]));
+  const certByFp = (fp) => t.graph.createdNodes.find((n) => n.type === "infrastructure.certificate" && n.data.fingerprint_sha256 === fp);
+  const namedFrom = (cert) => t.graph.createdEdges.filter((e) => e.label === "names domain" && e.from === cert?.id).map((e) => nodeById.get(e.to)?.data.domain_name).sort();
+  const own = certByFp("11".repeat(32));
+  check("san: dns_names become Domains off the certificate, '*.' stripped, deduped, internal dropped", namedFrom(own).join() === "example.com,origin.example.com");
+  check("san: san_count on the certificate", own?.data.san_count === 2);
+  const shared = certByFp("22".repeat(32));
+  check("san cap: a 30-name certificate adds no Domains", namedFrom(shared).length === 0);
+  check("san cap: ...and records how many it lists", shared?.data.san_count === 30);
+  check("san cap: ...and says why", t.logs.some((l) => /30 names — over 25/.test(l)));
+  check("san: cert.names is the fallback when no parsed SAN", namedFrom(certByFp("33".repeat(32))).join() === "fallback.example.net");
+  check("san: counted and summarised", res.counts.cert_names === 3 && /naming 3 domain\(s\)/.test(res.summary));
+}
+{
+  // Two selected IPs presenting one certificate. The host merges createNode calls by identity
+  // (imitated here), so both get the same certificate node — whose names are linked once, not per IP.
+  const service = { port: 443, protocol: "HTTP", cert: { fingerprint_sha256: "44".repeat(32), names: ["a.example.com", "b.example.com"] } };
+  const t = ctxFor({
+    nodes: {
+      ip1: { id: "ip1", type: "infrastructure.ip_address", data: { ip_address: "198.51.100.21" } },
+      ip2: { id: "ip2", type: "infrastructure.ip_address", data: { ip_address: "198.51.100.22" } },
+    },
+    selection: ["ip1", "ip2"],
+    respond: () => ({ status: 200, body: { result: { resource: { services: [service] } } } }),
+  });
+  const create = t.graph.createNode;
+  const byIdentity = new Map();
+  t.graph.createNode = async (d) => {
+    const k = `${d.type}\0${d.data.fingerprint_sha256 ?? d.data.domain_name}`;
+    if (!byIdentity.has(k)) byIdentity.set(k, await create(d));
+    return byIdentity.get(k);
+  };
+  const res = await hostPlugin.run(t.ctx);
+  check("san: a certificate shared by two selected IPs links its names once", t.graph.createdEdges.filter((e) => e.label === "names domain").length === 2 && res.counts.cert_names === 2);
+  check("san: ...while each IP still presents it", t.graph.createdEdges.filter((e) => e.label === "presents certificate").length === 2);
+}
+
 // ---- censys_search --------------------------------------------------------------------------
 const certNode = { id: "c1", type: "infrastructure.certificate", data: { fingerprint_sha256: CERT_FP } };
 const keyNode = { id: "k1", type: "infrastructure.ssh_host_key", data: { fingerprint_sha256: ED_FP } };

@@ -31,7 +31,7 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.2.4';
+const VERSION = '0.3.0';
 const TESTING_NOTE = 'Temporary plugin pack under testing — it may change or be removed.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
@@ -159,6 +159,27 @@ async function selected(ctx: HostContext, types: string[]): Promise<GraphNode[]>
     return out;
 }
 
+/** Suffixes no public certificate can name. Appliance default certificates carry them
+ *  (`unifi.local`), and as nodes they would join every such device into one hub. */
+const INTERNAL_SUFFIX = /\.(local|localdomain|localhost|internal|lan|home\.arpa)$/;
+const DOMAIN_RE = /^[a-z0-9._-]+\.[a-z]{2,}$/;
+
+/**
+ * The public DNS names a service's certificate lists: the parsed SAN dNSNames, or Censys' `names`
+ * (CN plus SANs) when those are absent. `*.` stripped (the wildcard's parent is the name the holder
+ * controls), deduped; IP entries, single labels and internal names dropped.
+ */
+function certNames(svc: any): string[] {
+    const raw = svc?.cert?.parsed?.extensions?.subject_alt_name?.dns_names ?? svc?.cert?.names;
+    const out = new Set<string>();
+    for (const v of Array.isArray(raw) ? raw : []) {
+        if (typeof v !== 'string') continue;
+        const name = v.trim().toLowerCase().replace(/\.$/, '').replace(/^\*\./, '');
+        if (DOMAIN_RE.test(name) && !INTERNAL_SUFFIX.test(name)) out.add(name);
+    }
+    return [...out];
+}
+
 /** The leaf certificate a service presented, as typepack properties. */
 function certData(svc: any): Record<string, unknown> | null {
     const fp = hex64(svc?.cert?.fingerprint_sha256) ?? hex64(svc?.tls?.fingerprint_sha256);
@@ -173,7 +194,38 @@ function certData(svc: any): Record<string, unknown> | null {
         serial_number: p.serial_number_hex ?? p.serial_number,
         not_before: p.validity_period?.not_before,
         not_after: p.validity_period?.not_after,
+        // How many names it lists, kept even when they are too many to add (see addSanDomains).
+        san_count: certNames(svc).length || undefined,
     });
+}
+
+/** More SAN names than this and none become nodes. */
+const MAX_SANS = 25;
+
+/**
+ * A certificate's names as Domain nodes, linked certificate → domain by 'names domain' — not 'has
+ * certificate', since a name a certificate lists may never have served it.
+ *
+ * Past MAX_SANS names nothing fans out. A list that long is a CDN or shared-hosting certificate
+ * whose tenants have nothing to do with each other; the certificate node is already the point they
+ * share, and san_count on it says how many there are. Returns how many were linked.
+ *
+ * Once per certificate per run (`done`): when several selected IPs present one certificate, its
+ * names are the certificate's, and linking them again for each IP would only repeat the edges.
+ */
+async function addSanDomains(ctx: HostContext, certId: string, names: string[], who: string, done: Set<string>): Promise<number> {
+    if (done.has(certId)) return 0;
+    done.add(certId);
+    if (names.length > MAX_SANS) {
+        ctx.progress?.log?.(`${who}: a certificate lists ${names.length} names — over ${MAX_SANS}, so none were added (san_count is on the certificate)`);
+        return 0;
+    }
+    for (const name of names) {
+        if (ctx.signal?.aborted) throw abortErr();
+        const node = await ctx.graph!.createNode!({ type: 'infrastructure.domain', data: { domain_name: name } });
+        await ctx.graph!.createEdge!({ from: certId, to: node.id, label: 'names domain' });
+    }
+    return names.length;
 }
 
 /**
@@ -200,7 +252,7 @@ export const censysHostLookup = definePlugin({
         name: 'Censys Host Lookup',
         version: VERSION,
         description:
-            "Looks up each selected IP Address on Censys and adds what its services present: TLS certificates (with subject CN, issuer, serial and validity) linked by 'presents certificate', and SSH host keys (identified by the SHA-256 of the key) linked by 'presents host key'. Also lists the IP's open ports and protocols as censys_services. Use it to learn which certificate or SSH key a server exposes, for example before searching for other hosts that share it. Costs 1 Censys credit per IP; works on a free Censys account. Desktop only.",
+            "Looks up each selected IP Address on Censys and adds what its services present: TLS certificates (with subject CN, issuer, serial, validity and san_count) linked by 'presents certificate', the domain names each certificate lists as Domains linked from it by 'names domain' (only when it lists 25 or fewer), and SSH host keys (identified by the SHA-256 of the key) linked by 'presents host key'. Also lists the IP's open ports and protocols as censys_services. Use it to learn which certificate or SSH key a server exposes, for example before searching for other hosts that share it. Costs 1 Censys credit per IP; works on a free Censys account. Desktop only.",
         icon: 'server',
         platforms: PLATFORMS,
         io: {
@@ -208,6 +260,7 @@ export const censysHostLookup = definePlugin({
             produces: [
                 { typepack: INFRA, category: 'infrastructure', name: 'certificate' },
                 { typepack: INFRA, category: 'infrastructure', name: 'ssh_host_key' },
+                { typepack: INFRA, category: 'infrastructure', name: 'domain' },
             ],
         },
         scopes: { graph: GRAPH_SCOPES, network: NET_SCOPE, config: CONFIG },
@@ -215,8 +268,9 @@ export const censysHostLookup = definePlugin({
     },
     async run(ctx): Promise<RunResult> {
         const nodes = await selected(ctx, ['infrastructure.ip_address']);
-        const counts = { checked: 0, certificates: 0, host_keys: 0, misses: 0 };
+        const counts = { checked: 0, certificates: 0, cert_names: 0, host_keys: 0, misses: 0 };
         if (!nodes.length) return { summary: 'Select one or more IP Address nodes first', counts };
+        const namedCerts = new Set<string>();
         for (let i = 0; i < nodes.length; i++) {
             if (ctx.signal?.aborted) throw abortErr();
             const n = nodes[i];
@@ -249,6 +303,7 @@ export const censysHostLookup = definePlugin({
                     const node = await ctx.graph!.createNode!({ type: 'infrastructure.certificate', data: cert });
                     await ctx.graph!.createEdge!({ from: n.id, to: node.id, label: 'presents certificate' });
                     counts.certificates++;
+                    counts.cert_names += await addSanDomains(ctx, node.id, certNames(svc), ip, namedCerts);
                 }
                 const fp = hex64(svc?.ssh?.server_host_key?.fingerprint_sha256);
                 if (fp && !seenKeys.has(fp)) {
@@ -265,7 +320,9 @@ export const censysHostLookup = definePlugin({
         ctx.progress?.set?.({ percent: 100 });
         const summary = `${counts.checked} of ${nodes.length} IP(s) found on Censys: ${
             counts.certificates
-        } certificate(s), ${counts.host_keys} SSH host key(s)${counts.misses ? `, ${counts.misses} skipped` : ''}`;
+        } certificate(s)${counts.cert_names ? ` naming ${counts.cert_names} domain(s)` : ''}, ${counts.host_keys} SSH host key(s)${
+            counts.misses ? `, ${counts.misses} skipped` : ''
+        }`;
         return { summary, counts };
     },
 });
@@ -465,7 +522,7 @@ const pack: VineyardPluginPack & {
     content_type: 'vineyard:pluginpack',
     name: 'Censys (under testing)',
     version: VERSION,
-    description: `Censys Platform lookups and searches with the analyst's own Personal Access Token: the TLS certificates, SSH host keys and open services an IP presents, the other hosts presenting the same certificate or SSH key, and free Censys Query Language (CenQL) searches. Desktop only. ${TESTING_NOTE}`,
+    description: `Censys Platform lookups and searches with the analyst's own Personal Access Token: the TLS certificates (and the domain names they list), SSH host keys and open services an IP presents, the other hosts presenting the same certificate or SSH key, and free Censys Query Language (CenQL) searches. Desktop only. ${TESTING_NOTE}`,
     author: { name: 'VINEYARD', url: 'https://vineyard.run' },
     license: 'Apache-2.0',
     icon: 'scan-line',
