@@ -337,6 +337,27 @@ const searchBody = {
   const q = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 422, body: { error: { message: "invalid query" } } }), params: { query: "host.(" } });
   const err = await searchPlugin.run(q.ctx).catch((e) => e);
   check("a rejected query ends the run with Censys' reason", err instanceof Error && /rejected the query — invalid query/.test(err.message));
+  // The Platform's problem+json: a one-line detail, and the field it objects to in errors[].
+  const pj = ctxFor({ nodes: {}, selection: [], params: { query: 'host.services.cert.parsed.names="x.example"' }, respond: () => ({ status: 422, body: {
+    title: "Unprocessable Entity", status: 422, detail: "Query error",
+    errors: [{ location: "body.query", message: "unknown field host.services.cert.parsed.names", value: "host.services.cert.parsed.names" }],
+  } }) });
+  const pjErr = await searchPlugin.run(pj.ctx).catch((e) => e);
+  check("a 422 passes Censys's errors[] through with the field it names", pjErr instanceof Error && /Query error — body\.query: unknown field host\.services\.cert\.parsed\.names \(HTTP 422\)/.test(pjErr.message));
+  check("a rejected query points at the CenQL notes and the common corrections", /CenQL notes/.test(pjErr.message) && /host\.services\.cert\.names/.test(pjErr.message) && /host\.ip, not ip/.test(pjErr.message));
+  // A body with hundreds of entries must not become a message of tens of thousands of characters.
+  const flood = ctxFor({ nodes: {}, selection: [], params: { query: "host.x=1" }, respond: () => ({ status: 422, body: {
+    detail: "Query error",
+    errors: [
+      ...Array.from({ length: 200 }, (_, i) => ({ location: "body.query", message: `unknown field host.f${i} ${"x".repeat(400)}` })),
+      { location: "body.query", message: `unknown field host.f0 ${"x".repeat(400)}` },
+    ],
+  } }) });
+  const floodErr = await searchPlugin.run(flood.ctx).catch((e) => e);
+  check("a flood of errors[] is capped at five entries, clipped, deduplicated and counted", floodErr instanceof Error && floodErr.message.length < 2500 && /195 more/.test(floodErr.message) && (floodErr.message.match(/unknown field/g) || []).length === 5);
+  const qd = searchPlugin.manifest.params.properties.query.description;
+  check("the query parameter carries the CenQL summary and the reference link", /Platform syntax, not Legacy Search/.test(qd) && /host\.services\.cert\.names/.test(qd) && /https:\/\/docs\.censys\.com\/docs\/censys-query-language/.test(qd));
+  check("the plugin description stays within the catalog's 1024 characters", searchPlugin.manifest.description.length <= 1024);
 }
 for (const n of ok) console.log(`  ok   ${n}`);
 for (const n of fail) console.log(`  FAIL ${n}`);

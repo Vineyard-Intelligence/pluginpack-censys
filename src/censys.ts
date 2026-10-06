@@ -31,7 +31,7 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const TESTING_NOTE = 'Temporary plugin pack under testing — it may change or be removed.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
@@ -121,7 +121,25 @@ async function censys(ctx: HostContext, method: 'GET' | 'POST', path: string, bo
         let msg = '';
         try {
             const j = (await res.json()) as any;
-            msg = j?.error?.message ?? j?.message ?? j?.detail ?? '';
+            // The Platform answers in problem+json: `detail` is one line ("Query error"), and the
+            // `errors` list is where it says WHICH part of the request was wrong. Keeping only the
+            // first line left an agent that had guessed a field name nothing to correct it from.
+            // Bounded: the message goes into the agent's context and a toast as it is, and nothing
+            // limits how many entries a body may carry.
+            const head = j?.error?.message ?? j?.message ?? j?.detail ?? j?.title ?? '';
+            const clip = (t: string) => (t.length > 300 ? `${t.slice(0, 300)}…` : t);
+            const seen = new Set<string>([head]);
+            const parts: string[] = [];
+            let more = 0;
+            for (const x of Array.isArray(j?.errors) ? j.errors : []) {
+                const part = [x?.location, x?.message].filter((v) => typeof v === 'string' && v).join(': ');
+                if (!part || seen.has(part)) continue;
+                seen.add(part);
+                if (parts.length < 5) parts.push(clip(part));
+                else more++;
+            }
+            if (more) parts.push(`${more} more`);
+            msg = [head, ...parts].filter(Boolean).join(' — ');
         } catch {
             /* non-JSON error body — the status line has to do */
         }
@@ -348,7 +366,7 @@ export const censysSearch = definePlugin({
         name: 'Censys Search',
         version: VERSION,
         description:
-            "Searches Censys for hosts, two ways. With TLS Certificate or SSH Host Key nodes selected, it finds every host presenting that certificate or key, adds their IP Addresses linked by 'presents certificate' / 'presents host key', and records the total number of matching hosts on the node as censys_host_count (thousands usually means a shared device default, not one operator). With a Censys Query Language (CenQL) query in the Run dialog, e.g. host.services.cert.parsed.subject.common_name=\"example.com\", it adds what the query matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Needs a paid Censys account (Starter or higher) and its organization ID; each search costs credits. Desktop only.",
+            "Searches Censys for hosts, two ways. With TLS Certificate or SSH Host Key nodes selected, it finds every host presenting that certificate or key, adds their IP Addresses linked by 'presents certificate' / 'presents host key', and records the total number of matching hosts on the node as censys_host_count (thousands usually means a shared device default, not one operator). With a Censys Query Language (CenQL) query in the Run dialog (syntax and common fields in the query parameter's description), it adds what the query matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Needs a paid Censys account (Starter or higher) and its organization ID; each search costs credits. Desktop only.",
         icon: 'search',
         platforms: PLATFORMS,
         params: {
@@ -357,8 +375,18 @@ export const censysSearch = definePlugin({
                 query: {
                     type: 'string',
                     title: 'CenQL query',
-                    description:
-                        'A Censys Query Language query, e.g. host.services.cert.parsed.subject.common_name="example.com". Runs alongside any selected certificates or SSH host keys; leave empty to search only those.',
+                    // A summary of https://docs.censys.com/docs/censys-query-language, carried here
+                    // because an agent writing a query reads THIS, and the one example it used to
+                    // hold was all it had: it guessed the rest from memory, mixed in Legacy Search
+                    // forms, and lost whole pivots to 422s (2026-10-07 transcripts: 4 of 16 and 16
+                    // of 34 free queries rejected, every one a field path that does not exist).
+                    // Each field below resolves in the Platform's search OpenAPI schema.
+                    description: [
+                        'A Censys Query Language (CenQL) query, searched across hosts, certificates and web properties at once. Platform syntax, not Legacy Search: every full field path starts with host., cert. or web., and the prefix decides what matches (host.* finds hosts, cert.* certificates, web.* web properties); only the aliases below and the names inside a nested group are written without it. There is no unprefixed ip or services.* field: Legacy ip is host.ip, and Legacy services.tls.certificates.leaf_data.* is host.services.cert.* (host.services.tls.* still exists, for handshake data such as ja3s and ja4s). There is no …parsed.names and no …parsed.fingerprint_sha256.',
+                        'Operators: field="v" exact and case-sensitive; field: "v" case-insensitive token match; field=~`regex`; > < >= <= for ranges, with numbers and dates in quotes; field: * any non-zero value (an empty string does not match). On cert.names and *.common_name, ":" also matches subdomains: cert.names: "example.com" finds certificates for example.com and any sub.example.com, and host.services.cert.names: "example.com" finds the hosts serving such a certificate. Part of a label, such as "example", does not match with ":"; use =~ for that. Combine with and / or / not and parentheses. host.services: (port="22" and protocol="SSH") requires both on the same service. Quote values with "…", \'…\' or `…` — always for hashes, IPs and CIDR blocks (an unquoted value must match [a-zA-Z][a-zA-Z0-9._-]*).',
+                        'Common fields: host.ip (a CIDR block too: host.ip: "203.0.113.0/24"), host.services.port, host.services.protocol, host.autonomous_system.asn, host.dns.names, host.services.cert.fingerprint_sha256, host.services.cert.names (subject CN and SANs), host.services.cert.parsed.subject.common_name, host.services.cert.parsed.subject.organization, host.services.cert.parsed.issuer.organization, host.services.ssh.server_host_key.fingerprint_sha256, host.services.jarm.fingerprint, host.services.endpoints.http.html_title, host.services.endpoints.http.favicons.hash_sha256, web.hostname, cert.names, cert.fingerprint_sha256. Aliases search several fields at once, but not inside a nested group: sha256 (certificate fingerprints and HTTP body, favicon and banner hashes, not SSH host keys), org (WHOIS, AS and certificate subject or issuer organization).',
+                        'Full reference: https://docs.censys.com/docs/censys-query-language. Runs alongside any selected certificates or SSH host keys; leave empty to search only those.',
+                    ].join('\n'),
                 },
                 limit: {
                     type: 'integer',
@@ -416,7 +444,13 @@ export const censysSearch = definePlugin({
                 result = await search(query);
             } catch (e) {
                 if (e instanceof CensysError && (e.status === 400 || e.status === 422)) {
-                    throw new Error(`Censys rejected the query — ${e.message}`);
+                    // The corrections are the three wrong guesses the 2026-10-07 transcripts made
+                    // over and over; the query parameter's description has the rest.
+                    throw new Error(
+                        `Censys rejected the query — ${e.message}. Check every field against the CenQL notes in this plugin's query parameter: ` +
+                            'full field paths start with host., cert. or web. (host.ip, not ip); a certificate fingerprint is host.services.cert.fingerprint_sha256, not …cert.parsed.fingerprint_sha256; ' +
+                            'certificate names are host.services.cert.names or cert.names, not …parsed.names.',
+                    );
                 }
                 throw e;
             }
