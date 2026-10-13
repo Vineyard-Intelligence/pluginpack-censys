@@ -38,7 +38,7 @@ const INFRA = 'run.vineyard.typepacks.infrastructure';
 const PLATFORMS: PluginManifest['platforms'] = {
     primary: 'desktop',
     web: { runtime: 'sandbox-js', entry: 'dist/pack.mjs' },
-    desktop: { runtime: 'sandbox-js', entry: 'dist/pack.mjs', min_app_version: '0.1.0' },
+    desktop: { runtime: 'sandbox-js', entry: 'dist/pack.mjs' },
 };
 const NET_SCOPE: NetworkScope[] = [
     {
@@ -376,10 +376,10 @@ export const censysSearch = definePlugin({
                     type: 'string',
                     title: 'CenQL query',
                     // A summary of https://docs.censys.com/docs/censys-query-language, carried here
-                    // because an agent writing a query reads THIS, and the one example it used to
-                    // hold was all it had: it guessed the rest from memory, mixed in Legacy Search
-                    // forms, and lost whole pivots to 422s (2026-10-07 transcripts: 4 of 16 and 16
-                    // of 34 free queries rejected, every one a field path that does not exist).
+                    // because an agent writing a query reads THIS. Given a single example, an agent
+                    // guesses the rest from memory, mixes in Legacy Search forms, and loses whole
+                    // pivots to 422s (measured: 4 of 16 and 16 of 34 free queries rejected, every
+                    // one a field path that does not exist).
                     // Each field below resolves in the Platform's search OpenAPI schema.
                     description: [
                         'A Censys Query Language (CenQL) query, searched across hosts, certificates and web properties at once. Platform syntax, not Legacy Search: every full field path starts with host., cert. or web., and the prefix decides what matches (host.* finds hosts, cert.* certificates, web.* web properties); only the aliases below and the names inside a nested group are written without it. There is no unprefixed ip or services.* field: Legacy ip is host.ip, and Legacy services.tls.certificates.leaf_data.* is host.services.cert.* (host.services.tls.* still exists, for handshake data such as ja3s and ja4s). There is no …parsed.names and no …parsed.fingerprint_sha256.',
