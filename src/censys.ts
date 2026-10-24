@@ -1,4 +1,4 @@
-// Censys (under testing) — Censys Platform API host lookup and search for VINEYARD.
+// Censys (under test) — Censys Platform API host lookup and search for VINEYARD.
 //
 // Registered by the VINEYARD operator for academic research. It may be removed in the future.
 //
@@ -31,7 +31,7 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.3.2';
+const VERSION = '0.3.3';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
@@ -554,7 +554,7 @@ const pack: VineyardPluginPack & {
 } = {
     identifier: 'run.vineyard.pluginpacks.censys',
     content_type: 'vineyard:pluginpack',
-    name: 'Censys (under testing)',
+    name: 'Censys (under test)',
     version: VERSION,
     description: `Censys Platform lookups and searches with the analyst's own Personal Access Token: the TLS certificates (and the domain names they list), SSH host keys and open services an IP presents, the other hosts presenting the same certificate or SSH key, and free Censys Query Language (CenQL) searches. Desktop only. ${RESEARCH_NOTE}`,
     author: { name: 'VINEYARD', url: 'https://vineyard.run' },

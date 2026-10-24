@@ -1,4 +1,4 @@
-# Censys (under testing)
+# Censys (under test)
 
 > Registered by the VINEYARD operator for academic research. It may be removed in the future.
 
