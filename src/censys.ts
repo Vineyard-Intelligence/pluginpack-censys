@@ -31,7 +31,7 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.3.3';
+const VERSION = '0.3.4';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
@@ -346,16 +346,8 @@ export const censysHostLookup = definePlugin({
 });
 
 // =============================================================================================
-// 2. censys_search — a CenQL query, and/or the hosts presenting a selected certificate or SSH key
+// 2. censys_search — one CenQL query, nothing else
 // =============================================================================================
-const BY_FINGERPRINT: Record<string, { field: string; label: string }> = {
-    'infrastructure.certificate': { field: 'host.services.cert.fingerprint_sha256', label: 'presents certificate' },
-    'infrastructure.ssh_host_key': {
-        field: 'host.services.ssh.server_host_key.fingerprint_sha256',
-        label: 'presents host key',
-    },
-};
-
 const isIp = (v: string): boolean =>
     /^\d{1,3}(\.\d{1,3}){3}$/.test(v) || (v.includes(':') && /^[0-9a-fA-F:]+$/.test(v));
 
@@ -366,7 +358,7 @@ export const censysSearch = definePlugin({
         name: 'Censys Search',
         version: VERSION,
         description:
-            "Searches Censys for hosts, two ways. With TLS Certificate or SSH Host Key nodes selected, it finds every host presenting that certificate or key, adds their IP Addresses linked by 'presents certificate' / 'presents host key', and records the total number of matching hosts on the node as censys_host_count (thousands usually means a shared device default, not one operator). With a Censys Query Language (CenQL) query in the Run dialog (syntax and common fields in the query parameter's description), it adds what the query matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. Needs a paid Censys account (Starter or higher) and its organization ID; each search costs credits. Desktop only.",
+            "Runs one Censys Query Language (CenQL) query and adds what it matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. The query is the only input — it takes nothing from the canvas — and the syntax and common fields are in the query parameter's description. Needs a paid Censys account (Starter or higher) and its organization ID; each search costs credits. Desktop only.",
         icon: 'search',
         platforms: PLATFORMS,
         params: {
@@ -397,9 +389,10 @@ export const censysSearch = definePlugin({
             },
         },
         io: {
-            // Empty on purpose: a typed query needs no selection, and a plugin that declares input
-            // types is only offered when such nodes are selected. Selected certificates and SSH host
-            // keys still reach run() and are searched for.
+            // Empty on purpose: this plugin reads only its own query. It used to also accept selected
+            // certificates and SSH host keys and search for every host presenting them, which meant
+            // two unrelated jobs behind one Run button and a result that depended on what happened to
+            // be selected.
             consumes: [],
             produces: [
                 { typepack: INFRA, category: 'infrastructure', name: 'ip_address' },
@@ -411,12 +404,9 @@ export const censysSearch = definePlugin({
         lifecycle: LIFECYCLE,
     },
     async run(ctx): Promise<RunResult> {
-        const nodes = await selected(ctx, Object.keys(BY_FINGERPRINT));
         const query = typeof ctx.params?.query === 'string' ? ctx.params.query.trim() : '';
         const counts = { searches: 0, hosts: 0, certificates: 0, domains: 0, misses: 0 };
-        if (!nodes.length && !query) {
-            return { summary: 'Enter a CenQL query, or select TLS Certificate / SSH Host Key nodes', counts };
-        }
+        if (!query) return { summary: 'Enter a CenQL query', counts };
         const raw = Number(ctx.params?.limit);
         const limit = Number.isInteger(raw) && raw >= 1 ? Math.min(raw, 100) : 25;
         const capped: string[] = [];
@@ -434,11 +424,8 @@ export const censysSearch = definePlugin({
         };
         const hitsOf = (result: any): any[] => (Array.isArray(result?.hits) ? result.hits : []);
 
-        const steps = nodes.length + (query ? 1 : 0);
-        let step = 0;
-
+        ctx.progress?.set?.({ percent: 0, message: 'Running the query' });
         if (query) {
-            ctx.progress?.set?.({ percent: 0, message: 'Running the query' });
             let result: any;
             try {
                 result = await search(query);
@@ -455,7 +442,6 @@ export const censysSearch = definePlugin({
                 throw e;
             }
             counts.searches++;
-            step++;
             const hits = hitsOf(result);
             for (const h of hits) {
                 if (ctx.signal?.aborted) throw abortErr();
@@ -485,54 +471,6 @@ export const censysSearch = definePlugin({
             if (total > hits.length) capped.push(`query ${hits.length} of ${total}`);
         }
 
-        for (const n of nodes) {
-            if (ctx.signal?.aborted) throw abortErr();
-            const fp = hex64(n.data.fingerprint_sha256);
-            if (!fp) {
-                counts.misses++;
-                ctx.progress?.log?.(`${n.id}: no SHA-256 fingerprint to search for`);
-                continue;
-            }
-            const by = BY_FINGERPRINT[n.type];
-            ctx.progress?.set?.({
-                percent: Math.round((step / steps) * 100),
-                message: `Searching ${fp.slice(0, 12)}…`,
-            });
-            let result: any;
-            try {
-                result = await search(`${by.field}="${fp}"`);
-            } catch (e) {
-                const why = itemMiss(e);
-                if (!why) throw e;
-                counts.misses++;
-                ctx.progress?.log?.(`${fp.slice(0, 12)}…: ${why}`);
-                continue;
-            }
-            counts.searches++;
-            step++;
-            const total = Number(result?.total_hits ?? 0);
-            await ctx.graph!.updateNode!(n.id, { censys_host_count: total });
-
-            const ips = [
-                ...new Set(
-                    hitsOf(result)
-                        .map((h) => h?.host_v1?.resource?.ip)
-                        .filter((ip) => typeof ip === 'string' && ip),
-                ),
-            ];
-            for (const ip of ips) {
-                const node = await ctx.graph!.createNode!({
-                    type: 'infrastructure.ip_address',
-                    data: { ip_address: ip },
-                });
-                await ctx.graph!.createEdge!({ from: node.id, to: n.id, label: by.label });
-                counts.hosts++;
-            }
-            if (total > ips.length) {
-                capped.push(`${fp.slice(0, 12)}… ${ips.length} of ${total}`);
-                ctx.progress?.log?.(`${fp.slice(0, 12)}…: added ${ips.length} of ${total} hosts`);
-            }
-        }
         ctx.progress?.set?.({ percent: 100 });
         const added = [
             `${counts.hosts} IP(s)`,
@@ -541,7 +479,7 @@ export const censysSearch = definePlugin({
         ].filter(Boolean);
         const summary = `${counts.searches} search(es), ${added.join(', ')}${
             capped.length ? ` — capped: ${capped.join('; ')}` : ''
-        }${counts.misses ? `, ${counts.misses} skipped` : ''}`;
+}`;
         return { summary, counts };
     },
 });

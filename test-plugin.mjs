@@ -263,9 +263,7 @@ const hostBody = {
   check("san: ...while each IP still presents it", t.graph.createdEdges.filter((e) => e.label === "presents certificate").length === 2);
 }
 
-// ---- censys_search --------------------------------------------------------------------------
-const certNode = { id: "c1", type: "infrastructure.certificate", data: { fingerprint_sha256: CERT_FP } };
-const keyNode = { id: "k1", type: "infrastructure.ssh_host_key", data: { fingerprint_sha256: ED_FP } };
+// ---- censys_search: one CenQL query -----------------------------------------------------------
 const searchBody = {
   result: {
     total_hits: 300,
@@ -278,31 +276,35 @@ const searchBody = {
   },
 };
 {
-  const t = ctxFor({ nodes: { c1: certNode, k1: keyNode }, selection: ["c1", "k1"], respond: () => ({ status: 200, body: searchBody }), params: { limit: 5 } });
+  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body: searchBody }), params: { query: 'host.services.port=8443', limit: 5 } });
   const res = await searchPlugin.run(t.ctx);
-  const [c, k] = t.net.calls;
-  const cb = JSON.parse(c.init.body);
-  const kb = JSON.parse(k.init.body);
-  check("search endpoint and method", c.url === "https://api.platform.censys.io/v3/global/search/query" && c.init.method === "POST");
-  check("cert query uses the lowercased fingerprint", cb.query === `host.services.cert.fingerprint_sha256="${CERT_FP.toLowerCase()}"`);
-  check("ssh query field", kb.query === `host.services.ssh.server_host_key.fingerprint_sha256="${ED_FP}"`);
-  check("limit param becomes page_size", cb.page_size === 5);
-  check("host count recorded on the node", t.graph.updates.some((u) => u.id === "c1" && u.data.censys_host_count === 300));
-  const ips = t.graph.createdNodes.filter((n) => n.type === "infrastructure.ip_address");
-  check("distinct IPs only, web hits ignored", ips.length === 4); // 2 per searched node
-  check("edges run IP -> pivot node", t.graph.createdEdges.some((e) => e.to === "c1" && e.label === "presents certificate") && t.graph.createdEdges.some((e) => e.to === "k1" && e.label === "presents host key"));
-  check("cap reported", /capped/.test(res.summary) && /2 of 300/.test(res.summary));
+  const b = JSON.parse(t.net.calls[0].init.body);
+  check("search endpoint and method", t.net.calls[0].url === "https://api.platform.censys.io/v3/global/search/query" && t.net.calls[0].init.method === "POST");
+  check("the query is the only input", b.query === "host.services.port=8443" && t.net.calls.length === 1);
+  check("limit param becomes page_size", b.page_size === 5);
+  check("capped search reports what it added", /capped/.test(res.summary) && /4 of 300/.test(res.summary));
+  check("search adds no edges", t.graph.createdEdges.length === 0);
 }
 {
-  const t = ctxFor({ nodes: { c1: certNode }, selection: ["c1"], respond: () => ({ status: 200, body: { result: { total_hits: 0, hits: [] } } }), params: { limit: 999 } });
+  // Selecting a certificate must change nothing: the plugin reads its query, not the canvas.
+  const cert = { id: "c1", type: "infrastructure.certificate", data: { fingerprint_sha256: CERT_FP } };
+  const t = ctxFor({ nodes: { c1: cert }, selection: ["c1"], respond: () => ({ status: 200, body: searchBody }), params: { query: "host.ip=1.2.3.4" } });
+  await searchPlugin.run(t.ctx);
+  check("a selected certificate does not become an extra search", t.net.calls.length === 1 && JSON.parse(t.net.calls[0].init.body).query === "host.ip=1.2.3.4");
+  const none = ctxFor({ nodes: { c1: cert }, selection: ["c1"], respond: () => ({ status: 200, body: searchBody }) });
+  const res = await searchPlugin.run(none.ctx);
+  check("with no query there is nothing to do", none.net.calls.length === 0 && none.graph.updates.length === 0 && /Enter a CenQL query/.test(res.summary));
+}
+{
+  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body: { result: { total_hits: 0, hits: [] } } }), params: { query: "x", limit: 999 } });
   await searchPlugin.run(t.ctx);
   check("limit clamps to 100", JSON.parse(t.net.calls[0].init.body).page_size === 100);
-  const d = ctxFor({ nodes: { c1: certNode }, selection: ["c1"], respond: () => ({ status: 200, body: { result: { total_hits: 0, hits: [] } } }) });
+  const d = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body: { result: { total_hits: 0, hits: [] } } }), params: { query: "x" } });
   await searchPlugin.run(d.ctx);
   check("default limit 25", JSON.parse(d.net.calls[0].init.body).page_size === 25);
 }
 {
-  const t = ctxFor({ nodes: { c1: certNode, k1: keyNode }, selection: ["c1", "k1"], respond: () => ({ status: 403, body: { error: { message: "Forbidden" } } }) });
+  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 403, body: { error: { message: "Forbidden" } } }), params: { query: "x" } });
   const err = await searchPlugin.run(t.ctx).catch((e) => e);
   check("403 on search ends the run with the tier reason", err instanceof Error && /paid account/.test(err.message) && t.net.calls.length === 1);
 }
