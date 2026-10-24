@@ -31,7 +31,7 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.3.4';
+const VERSION = '0.3.5';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
@@ -363,6 +363,11 @@ export const censysSearch = definePlugin({
         platforms: PLATFORMS,
         params: {
             type: 'object',
+            // The query is the whole input: with nothing typed there is nothing to search, so the
+            // Run button stays disabled until it is filled. The agent path does not gate on this
+            // (invoke_plugin passes params straight through), which is why run() still refuses an
+            // empty query itself.
+            required: ['query'],
             properties: {
                 query: {
                     type: 'string',
@@ -384,7 +389,7 @@ export const censysSearch = definePlugin({
                     type: 'integer',
                     title: 'Results per search',
                     description:
-                        'Maximum results added per search (the query, and each selected certificate or SSH host key). 1–100, default 25.',
+                        'Maximum results added per search. 1–100, default 25.',
                 },
             },
         },
