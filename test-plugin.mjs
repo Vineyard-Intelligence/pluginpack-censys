@@ -358,6 +358,7 @@ const searchBody = {
   const floodErr = await searchPlugin.run(flood.ctx).catch((e) => e);
   check("a flood of errors[] is capped at five entries, clipped, deduplicated and counted", floodErr instanceof Error && floodErr.message.length < 2500 && /195 more/.test(floodErr.message) && (floodErr.message.match(/unknown field/g) || []).length === 5);
   const qd = searchPlugin.manifest.params.properties.query.description;
+  check("the query is a required field", Array.isArray(searchPlugin.manifest.params.required) && searchPlugin.manifest.params.required.includes("query"));
   check("the query parameter carries the CenQL summary and the reference link", /Platform syntax, not Legacy Search/.test(qd) && /host\.services\.cert\.names/.test(qd) && /https:\/\/docs\.censys\.com\/docs\/censys-query-language/.test(qd));
   check("the plugin description stays within the catalog's 1024 characters", searchPlugin.manifest.description.length <= 1024);
 }
