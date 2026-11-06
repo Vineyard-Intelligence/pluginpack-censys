@@ -31,7 +31,7 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.3.5';
+const VERSION = '0.3.6';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
