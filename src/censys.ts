@@ -31,7 +31,10 @@ import type {
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
-const VERSION = '0.3.6';
+// Two versions: an installed project is offered an update by the PACK's version alone, so a change
+// to the pack document bumps only PACK_VERSION; PLUGIN_VERSION moves when a plugin changes.
+const PACK_VERSION = '0.4.0';
+const PLUGIN_VERSION = '0.3.6';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
@@ -268,7 +271,7 @@ export const censysHostLookup = definePlugin({
         identifier: 'run.vineyard.plugins.censys_host_lookup',
         content_type: 'vineyard:plugin',
         name: 'Censys Host Lookup',
-        version: VERSION,
+        version: PLUGIN_VERSION,
         description:
             "Looks up each selected IP Address on Censys and adds what its services present: TLS certificates (with subject CN, issuer, serial, validity and san_count) linked by 'presents certificate', the domain names each certificate lists as Domains linked from it by 'names domain' (only when it lists 25 or fewer), and SSH host keys (identified by the SHA-256 of the key) linked by 'presents host key'. Also lists the IP's open ports and protocols as censys_services. Use it to learn which certificate or SSH key a server exposes, for example before searching for other hosts that share it. Costs 1 Censys credit per IP; works on a free Censys account. Desktop only.",
         icon: 'server',
@@ -356,7 +359,7 @@ export const censysSearch = definePlugin({
         identifier: 'run.vineyard.plugins.censys_search',
         content_type: 'vineyard:plugin',
         name: 'Censys Search',
-        version: VERSION,
+        version: PLUGIN_VERSION,
         description:
             "Runs one Censys Query Language (CenQL) query and adds what it matches: hosts as IP Addresses, certificates as TLS Certificates, web properties as Domains. The query is the only input — it takes nothing from the canvas — and the syntax and common fields are in the query parameter's description. Needs a paid Censys account (Starter or higher) and its organization ID; each search costs credits. Desktop only.",
         icon: 'search',
@@ -489,6 +492,80 @@ export const censysSearch = definePlugin({
     },
 });
 
+// The pack's page in the marketplace drawer, in Markdown. Lines in an array rather than one template
+// literal, because the Markdown is full of backticks.
+const PAGE = [
+    "Censys Platform data for infrastructure pivots, read with the analyst's own Censys account. One plugin shows what a server presents to the internet: its TLS certificates and the names they list, its SSH host keys and its open services. The other runs a Censys Query Language (CenQL) query, for example every host presenting one certificate or one SSH host key.",
+    '',
+    '> ' + RESEARCH_NOTE,
+    '',
+    '## Plugins',
+    '',
+    '### Censys Host Lookup',
+    '',
+    '- **Runs on:** selected IP Address nodes.',
+    "- **Adds a TLS Certificate** for each certificate the IP's services present, linked IP → certificate by `presents certificate`: SHA-256 fingerprint, subject CN, issuer, serial number (hex), validity dates and `san_count`. A certificate presented on several ports is added once.",
+    '- **Adds the names a certificate lists as Domains**, linked certificate → domain by `names domain`. `*.` is stripped, duplicates merge, and IP entries, single labels and internal names (`.local`, `.localdomain`, `.localhost`, `.internal`, `.lan`, `.home.arpa`) are dropped. A certificate listing more than 25 names adds none: that is usually a CDN or shared-hosting certificate, and `san_count` still records how many it lists.',
+    '- **Adds an SSH Host Key** for each SSH service, identified by the SHA-256 of the key and carrying its key type, linked IP → key by `presents host key`.',
+    '- **Writes `censys_services`** on the IP: its open services as `port/protocol`.',
+    '- An IP Censys has no record of, cannot show to this account, or rejects is logged and skipped; the run goes on.',
+    '- Costs 1 Censys credit per IP and works on a free account.',
+    '',
+    '### Censys Search',
+    '',
+    '- **Runs on:** one CenQL query typed in the Run dialog. It reads nothing from the canvas.',
+    '- **Adds** hosts as IP Addresses, certificates as TLS Certificates (the fields above) and web properties as Domains, or as IP Addresses when the web property is an address. No edges are added.',
+    '- **Results per search:** 1–100, default 25. When Censys has more matches than were added, the run summary says the search was capped.',
+    "- The query parameter's help text summarises the Platform syntax and its common fields. Full field paths start with `host.`, `cert.` or `web.`; Legacy Search forms such as `ip` or `services.*` do not exist there. A few pivots:",
+    '  - hosts presenting a certificate: `host.services.cert.fingerprint_sha256="<sha256>"`',
+    '  - hosts presenting an SSH host key: `host.services.ssh.server_host_key.fingerprint_sha256="<sha256>"`',
+    '  - certificates for a domain and its subdomains: `cert.names: "example.com"`',
+    "- A query Censys rejects (HTTP 400 or 422) ends the run with Censys' reason, including which part of the query it objected to.",
+    '- Needs a paid Censys account (Starter or higher) and its organization ID. A free account is refused ("requires an organization ID"), and the run stops with that reason.',
+    '',
+    'Full CenQL reference: https://docs.censys.com/docs/censys-query-language',
+    '',
+    '## Requirements',
+    '',
+    '- **Censys Personal Access Token** (required), stored as a secret plugin setting and sent as a Bearer token. It is created at https://accounts.censys.io/settings/personal-access-tokens',
+    "- **Censys Organization ID** (optional). Set it to bill an organization's credits; leave it empty to use a free account, which can run host lookups only.",
+    '- **Desktop app only.** Censys sends no CORS headers, so the web build cannot read its responses; on the web both plugins refuse with that reason.',
+    '- **Infrastructure Type Pack 2.5.0 or later**, for the SSH Host Key type.',
+    '',
+    '## Cost and limits',
+    '',
+    'From the Censys documentation as of 2026-09, which the source cites:',
+    '',
+    '| Account | What it can do | Cost |',
+    '|---|---|---|',
+    '| Free | host, certificate and web-property lookups only; 100 credits a month; one request at a time | 1 credit per host |',
+    '| Starter or higher | search as well | 5 credits per page of results, 8 with regex |',
+    '',
+    'HTTP 429 (the one-request-at-a-time limit) and 503 (the per-IP rate limit) are retried up to three times, after 2, 4 and 8 seconds. A rejected token (HTTP 401) ends the run.',
+    '',
+    '## What it contacts',
+    '',
+    "- Only `https://api.platform.censys.io/v3/global`: GET for host lookups, POST for searches. Censys sees each IP looked up and each query run, under the analyst's account.",
+    '- **Passive.** The hosts under investigation are never contacted; everything comes from data Censys has already collected.',
+    '- Graph writes are staged: nothing reaches the project until the analyst reviews and applies them.',
+    '',
+    '## Reading the results',
+    '',
+    "- A certificate or SSH host key that many hosts present is usually a shared or default one (an appliance image, a hosting panel), not one operator's infrastructure.",
+    "- Censys records one host key per SSH service, the one its scanner negotiated (often ECDSA). A server's RSA or Ed25519 key seen by another source will not match it.",
+    '- A name a certificate lists may never have served that certificate, which is why the link is `names domain` and not `has certificate`.',
+    '',
+    '## Data and licences',
+    '',
+    'Data returned by Censys is subject to the Censys terms: https://censys.com/terms-of-service/',
+    '',
+    'The pack bundles no data of its own.',
+    '',
+    '## Source',
+    '',
+    'https://github.com/Vineyard-Intelligence/pluginpack-censys (Apache-2.0). `dist/pack.mjs` is built from `src/censys.ts` with `node build.mjs`.',
+].join('\n');
+
 const pack: VineyardPluginPack & {
     author: { name: string; url: string };
     license: string;
@@ -498,8 +575,9 @@ const pack: VineyardPluginPack & {
     identifier: 'run.vineyard.pluginpacks.censys',
     content_type: 'vineyard:pluginpack',
     name: 'Censys (under test)',
-    version: VERSION,
-    description: `Censys Platform lookups and searches with the analyst's own Personal Access Token: the TLS certificates (and the domain names they list), SSH host keys and open services an IP presents, the other hosts presenting the same certificate or SSH key, and free Censys Query Language (CenQL) searches. Desktop only. ${RESEARCH_NOTE}`,
+    version: PACK_VERSION,
+    summary: `Censys lookups with your own token: certificates, SSH host keys and services an IP presents; hosts sharing a certificate or key; CenQL searches. Desktop only. ${RESEARCH_NOTE}`,
+    description: PAGE,
     author: { name: 'VINEYARD', url: 'https://vineyard.run' },
     license: 'Apache-2.0',
     icon: 'scan-line',
