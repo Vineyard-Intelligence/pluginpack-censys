@@ -33,7 +33,7 @@ import type {
 const API = 'https://api.platform.censys.io/v3/global';
 // Two versions: an installed project is offered an update by the PACK's version alone, so a change
 // to the pack document bumps only PACK_VERSION; PLUGIN_VERSION moves when a plugin changes.
-const PACK_VERSION = '0.4.0';
+const PACK_VERSION = '0.4.1';
 const PLUGIN_VERSION = '0.3.6';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
@@ -385,7 +385,7 @@ export const censysSearch = definePlugin({
                         'A Censys Query Language (CenQL) query, searched across hosts, certificates and web properties at once. Platform syntax, not Legacy Search: every full field path starts with host., cert. or web., and the prefix decides what matches (host.* finds hosts, cert.* certificates, web.* web properties); only the aliases below and the names inside a nested group are written without it. There is no unprefixed ip or services.* field: Legacy ip is host.ip, and Legacy services.tls.certificates.leaf_data.* is host.services.cert.* (host.services.tls.* still exists, for handshake data such as ja3s and ja4s). There is no …parsed.names and no …parsed.fingerprint_sha256.',
                         'Operators: field="v" exact and case-sensitive; field: "v" case-insensitive token match; field=~`regex`; > < >= <= for ranges, with numbers and dates in quotes; field: * any non-zero value (an empty string does not match). On cert.names and *.common_name, ":" also matches subdomains: cert.names: "example.com" finds certificates for example.com and any sub.example.com, and host.services.cert.names: "example.com" finds the hosts serving such a certificate. Part of a label, such as "example", does not match with ":"; use =~ for that. Combine with and / or / not and parentheses. host.services: (port="22" and protocol="SSH") requires both on the same service. Quote values with "…", \'…\' or `…` — always for hashes, IPs and CIDR blocks (an unquoted value must match [a-zA-Z][a-zA-Z0-9._-]*).',
                         'Common fields: host.ip (a CIDR block too: host.ip: "203.0.113.0/24"), host.services.port, host.services.protocol, host.autonomous_system.asn, host.dns.names, host.services.cert.fingerprint_sha256, host.services.cert.names (subject CN and SANs), host.services.cert.parsed.subject.common_name, host.services.cert.parsed.subject.organization, host.services.cert.parsed.issuer.organization, host.services.ssh.server_host_key.fingerprint_sha256, host.services.jarm.fingerprint, host.services.endpoints.http.html_title, host.services.endpoints.http.favicons.hash_sha256, web.hostname, cert.names, cert.fingerprint_sha256. Aliases search several fields at once, but not inside a nested group: sha256 (certificate fingerprints and HTTP body, favicon and banner hashes, not SSH host keys), org (WHOIS, AS and certificate subject or issuer organization).',
-                        'Full reference: https://docs.censys.com/docs/censys-query-language. Runs alongside any selected certificates or SSH host keys; leave empty to search only those.',
+                        'Full reference: https://docs.censys.com/docs/censys-query-language. The query is the only input: selected nodes are not used. To find the hosts that share a certificate or SSH key, search its fingerprint (host.services.cert.fingerprint_sha256 or host.services.ssh.server_host_key.fingerprint_sha256).',
                     ].join('\n'),
                 },
                 limit: {
