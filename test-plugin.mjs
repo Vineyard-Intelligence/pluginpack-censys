@@ -80,6 +80,8 @@ function ctxFor({ nodes, selection, respond, platform = "desktop", config, param
 }
 
 const CERT_FP = "AB".repeat(32);
+// Censys writes its fingerprints in lowercase hex; uppercase here proves the pack folds them anyway.
+const CERT_SHA1 = "C0FFEE".repeat(6) + "C0FF";
 const ED_FP = "cd".repeat(32);
 const RSA_FP = "ef".repeat(32);
 const hostBody = {
@@ -94,6 +96,7 @@ const hostBody = {
           tls: { fingerprint_sha256: CERT_FP },
           cert: {
             fingerprint_sha256: CERT_FP,
+            fingerprint_sha1: CERT_SHA1,
             parsed: {
               subject: { common_name: ["origin.example.com"] },
               issuer_dn: "C=US, O=CloudFlare, Inc., OU=CloudFlare Origin SSL Certificate Authority",
@@ -146,6 +149,8 @@ const hostBody = {
   const certs = t.graph.createdNodes.filter((n) => n.type === "infrastructure.certificate");
   check("one certificate across two ports", certs.length === 1);
   check("certificate fingerprint lowercased", certs[0]?.data.fingerprint_sha256 === CERT_FP.toLowerCase());
+  // SSLBL lists certificates by SHA-1 only, and a SHA-256 cannot be turned into one.
+  check("certificate SHA-1 kept, lowercased, as fingerprint_sha1", certs[0]?.data.fingerprint_sha1 === CERT_SHA1.toLowerCase());
   check("certificate CN/issuer/validity", certs[0]?.data.subject_common_name === "origin.example.com" && /CloudFlare Origin/.test(certs[0]?.data.issuer) && certs[0]?.data.not_after === "2041-01-01T00:00:00Z" && certs[0]?.data.serial_number === "499602d2");
   const keys = t.graph.createdNodes.filter((n) => n.type === "infrastructure.ssh_host_key");
   check("two valid host keys, bad one skipped", keys.length === 2);
@@ -315,7 +320,7 @@ const searchBody = {
       total_hits: 3,
       hits: [
         { host_v1: { resource: { ip: "203.0.113.9" } } },
-        { certificate_v1: { resource: { fingerprint_sha256: CERT_FP, parsed: { subject: { common_name: ["a.example"] } } } } },
+        { certificate_v1: { resource: { fingerprint_sha256: CERT_FP, fingerprint_sha1: CERT_SHA1, parsed: { subject: { common_name: ["a.example"] } } } } },
         { webproperty_v1: { resource: { hostname: "Shop.Example.com", port: 443 } } },
         { webproperty_v1: { resource: { hostname: "198.51.100.20", port: 8443 } } },
       ],
@@ -327,6 +332,7 @@ const searchBody = {
   const types = t.graph.createdNodes.map((n) => `${n.type}:${JSON.stringify(n.data).slice(0, 40)}`);
   check("host hit -> IP", t.graph.createdNodes.some((n) => n.type === "infrastructure.ip_address" && n.data.ip_address === "203.0.113.9"));
   check("certificate hit -> certificate", t.graph.createdNodes.some((n) => n.type === "infrastructure.certificate" && n.data.subject_common_name === "a.example"));
+  check("certificate hit keeps its SHA-1", t.graph.createdNodes.some((n) => n.type === "infrastructure.certificate" && n.data.fingerprint_sha1 === CERT_SHA1.toLowerCase()));
   check("web property hostname -> lowercased domain", t.graph.createdNodes.some((n) => n.type === "infrastructure.domain" && n.data.domain_name === "shop.example.com"));
   check("web property IP hostname -> IP", t.graph.createdNodes.some((n) => n.type === "infrastructure.ip_address" && n.data.ip_address === "198.51.100.20"));
   check("query adds no edges", t.graph.createdEdges.length === 0);

@@ -16,6 +16,10 @@ hosts presenting the same certificate or key, and free CenQL queries.
 A certificate or key shared by many hosts usually means a shared or default certificate/key (an
 appliance image, a hosting panel), not one operator's infrastructure.
 
+A certificate keeps its SHA-1 as `fingerprint_sha1` next to the SHA-256 that identifies it. The
+abuse.ch SSLBL blacklist names certificates by SHA-1 alone, and the abuse.ch pack's SSLBL
+Certificate Check matches on it.
+
 Censys records one host key per SSH service — the one its scanner negotiated (often ECDSA) — so
 a server's RSA or Ed25519 key seen by another source will not match it.
 
@@ -30,7 +34,8 @@ a server's RSA or Ed25519 key seen by another source will not match it.
 
 **Desktop app only.** Censys sends no CORS headers, so the web build cannot read its responses.
 
-Requires the Infrastructure Type Pack 2.5.0 or later (for the SSH Host Key type).
+Requires the Infrastructure Type Pack 2.5.0 or later (for the SSH Host Key type); 4.2.0 or later
+declares `fingerprint_sha1`.
 
 ## Build
 

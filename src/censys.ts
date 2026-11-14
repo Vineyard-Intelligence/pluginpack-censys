@@ -33,8 +33,8 @@ import type {
 const API = 'https://api.platform.censys.io/v3/global';
 // Two versions: an installed project is offered an update by the PACK's version alone, so a change
 // to the pack document bumps only PACK_VERSION; PLUGIN_VERSION moves when a plugin changes.
-const PACK_VERSION = '0.4.2';
-const PLUGIN_VERSION = '0.3.6';
+const PACK_VERSION = '0.5.0';
+const PLUGIN_VERSION = '0.4.0';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
 
@@ -164,6 +164,8 @@ function itemMiss(e: unknown): string | null {
 
 const hex64 = (v: unknown): string | null =>
     typeof v === 'string' && /^[0-9a-fA-F]{64}$/.test(v.trim()) ? v.trim().toLowerCase() : null;
+const hex40 = (v: unknown): string | null =>
+    typeof v === 'string' && /^[0-9a-fA-F]{40}$/.test(v.trim()) ? v.trim().toLowerCase() : null;
 
 /** Drop empty values so a delta never overwrites a field with nothing. */
 function compact(o: Record<string, unknown>): Record<string, unknown> {
@@ -209,6 +211,11 @@ function certData(svc: any): Record<string, unknown> | null {
     const cn = Array.isArray(p.subject?.common_name) ? p.subject.common_name[0] : undefined;
     return compact({
         fingerprint_sha256: fp,
+        // Censys' certificate record carries the SHA-1 next to the SHA-256. It is kept because the
+        // abuse.ch SSLBL blacklist names certificates by SHA-1 alone and a SHA-256 cannot be turned
+        // into one; identity stays the SHA-256. Only the certificate object is read: `tls` here is
+        // handshake data, and its fingerprint is the SHA-256 alone.
+        fingerprint_sha1: hex40(svc?.cert?.fingerprint_sha1),
         subject_common_name: cn,
         issuer: p.issuer_dn,
         // Hex, as VirusTotal writes it — both packs fill the same certificate node.
