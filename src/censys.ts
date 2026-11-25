@@ -34,7 +34,7 @@ import type {
 const API = 'https://api.platform.censys.io/v3/global';
 // Two versions: an installed project is offered an update by the PACK's version alone, so a change
 // to the pack document bumps only PACK_VERSION; PLUGIN_VERSION moves when a plugin changes.
-const PACK_VERSION = '0.8.0';
+const PACK_VERSION = '0.9.0';
 const PLUGIN_VERSION = '0.4.0';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
@@ -80,13 +80,11 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
         signal?.addEventListener('abort', onAbort, { once: true });
     });
 
-/** A non-2xx answer that may be about one item rather than the whole run. `res` is that final
- *  answer, so an item miss can still be kept as evidence (see keep). */
+/** A non-2xx answer that may be about one item rather than the whole run. */
 class CensysError extends Error {
     constructor(
         readonly status: number,
         msg: string,
-        readonly res?: SafeResponse,
     ) {
         super(`${msg} (HTTP ${status})`);
     }
@@ -103,8 +101,8 @@ interface CensysReply {
  * per-IP rate limit) are retried with backoff; 401 ends the run, since every later call would fail
  * the same way. Everything else comes back as a CensysError for the caller to judge.
  *
- * Only the FINAL response leaves here, in the reply or on the CensysError: a throttled 429/503
- * that was retried says nothing about the host and must never be kept in place of the answer.
+ * Only the FINAL 2xx response leaves here, in the reply: a throttled 429/503 that was retried says
+ * nothing about the host and must never be kept in place of the answer.
  */
 async function censys(ctx: HostContext, method: 'GET' | 'POST', path: string, body?: unknown): Promise<CensysReply> {
     if (ctx.run?.platform && ctx.run.platform !== 'desktop') {
@@ -159,7 +157,7 @@ async function censys(ctx: HostContext, method: 'GET' | 'POST', path: string, bo
             /* non-JSON error body — the status line has to do */
         }
         if (res.status === 401) throw new Error('Censys rejected this Personal Access Token');
-        throw new CensysError(res.status, msg || 'Censys error', res);
+        throw new CensysError(res.status, msg || 'Censys error');
     }
 }
 
@@ -379,16 +377,15 @@ export const censysHostLookup = definePlugin({
             } catch (e) {
                 const why = itemMiss(e);
                 if (!why) throw e;
-                // Kept too (analyst's decision, 2026-11-25): "Censys had no record of this IP on this
-                // date" is itself a finding. A run-ending error (401, throttling past the retries)
-                // is about the account, not the IP, and is not kept.
-                if (e instanceof CensysError && e.res) await keep(ctx, n.id, 'host', e.res);
+                // Not kept (analyst's decision, 2026-11-25): a miss or an error carries nothing
+                // about the IP and only fills its raw results with noise.
                 counts.misses++;
                 ctx.progress?.log?.(`${ip}: ${why}`);
                 continue;
             }
-            await keep(ctx, n.id, 'host', reply.res);
             const host = reply.json?.result?.resource;
+            // Only an answer that holds a host record; an empty one keeps nothing, as a miss does.
+            if (host && typeof host === 'object') await keep(ctx, n.id, 'host', reply.res);
             counts.checked++;
             const services: any[] = Array.isArray(host?.services) ? host.services : [];
 

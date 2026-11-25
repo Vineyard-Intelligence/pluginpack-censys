@@ -370,9 +370,9 @@ const searchBody = {
 }
 // ---- raw results: ctx.retain (check:retain-feature-detect) --------------------------------------
 // Invariants, from the plugin raw results spec (§5, §9-1, §12):
-//   - Host Lookup keeps the FINAL answer for each IP on that IP's node, op "host": a 2xx, and the
-//     404/403/400/422 item misses too (the analyst keeps error answers). A retried 429 is never kept,
-//     and a run-ending error (401, throttling past the retries) keeps nothing.
+//   - Host Lookup keeps the FINAL answer for each IP on that IP's node, op "host", only when it is a
+//     2xx holding a host record. A miss (404/403/400/422), an empty answer, a retried 429 and a
+//     run-ending error keep nothing (analyst's decision, 2026-11-25: they only add noise).
 //   - Search keeps each hit as an EXCERPT on the node it became, through ctx.retainExcerpt only:
 //     the whole page goes to the host with the hit's pointer, and the host cuts and marks it. A host
 //     without retainExcerpt keeps nothing from a search (its retain would keep the page per node).
@@ -446,10 +446,19 @@ const bodyOf = (call) => (typeof call?.[2]?.body === "string" ? JSON.parse(call[
   });
   t.ctx.retain = spy;
   const res = await hostPlugin.run(t.ctx);
-  check("retain host: item misses are kept too, on their own IP", spy.calls.map((c) => `${c[0]}:${c[1]}:${c[2].status}`).join() === "a:host:404,b:host:200,c:host:403");
-  check("retain host: a 404 keeps Censys' own error body", bodyOf(spy.calls[0])?.error?.message === "Host not found");
+  check("retain host: item misses keep nothing; only the IP with a record does", spy.calls.map((c) => `${c[0]}:${c[1]}:${c[2].status}`).join() === "b:host:200");
   check("retain host: misses still skip the item", res.counts.misses === 2 && res.counts.checked === 1);
-  check("retain host: no secret in a kept error answer either", leaks(spy.calls).length === 0);
+  check("retain host: no secret in what is kept", leaks(spy.calls).length === 0);
+  // A 200 without a host record is an empty answer: nothing to keep.
+  const empty = retainSpy();
+  const e = ctxFor({
+    nodes: { a: { id: "a", type: "infrastructure.ip_address", data: { ip_address: "192.0.2.1" } } },
+    selection: ["a"],
+    respond: () => ({ status: 200, body: { result: {} } }),
+  });
+  e.ctx.retain = empty;
+  await hostPlugin.run(e.ctx);
+  check("retain host: a 200 with no host record keeps nothing", empty.calls.length === 0);
 }
 {
   const spy = retainSpy();
@@ -560,7 +569,7 @@ const bodyOf = (call) => (typeof call?.[2]?.body === "string" ? JSON.parse(call[
 }
 {
   // The bundle is the source rebuilt: the version the update check compares moved, and only it.
-  check("pack version is 0.8.0", pack.version === "0.8.0");
+  check("pack version is 0.9.0", pack.version === "0.9.0");
   check("member versions unchanged", hostPlugin.manifest.version === "0.4.0" && searchPlugin.manifest.version === "0.4.0");
 }
 for (const n of ok) console.log(`  ok   ${n}`);
