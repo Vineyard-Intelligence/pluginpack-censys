@@ -34,7 +34,7 @@ import type {
 const API = 'https://api.platform.censys.io/v3/global';
 // Two versions: an installed project is offered an update by the PACK's version alone, so a change
 // to the pack document bumps only PACK_VERSION; PLUGIN_VERSION moves when a plugin changes.
-const PACK_VERSION = '0.6.0';
+const PACK_VERSION = '0.7.0';
 const PLUGIN_VERSION = '0.4.0';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
@@ -177,17 +177,12 @@ const keepNoted = new WeakMap<HostContext, Set<string>>();
  *   - a refusal (over budget, a config value seen in the body) or a throw costs the raw copy, never
  *     the run: the mapped fields are already staged and are what the analyst ran this for.
  */
-async function keep(
-    ctx: HostContext,
-    nodeId: string,
-    op: string,
-    res: SafeResponse | { status: number; headers?: Record<string, string>; body: unknown },
-): Promise<void> {
+async function keep(ctx: HostContext, nodeId: string, op: string, res: SafeResponse): Promise<void> {
     if (typeof ctx.retain !== 'function') return;
     let reason = '';
     try {
         // The response's own text, not a re-serialised parse, so the host hashes the bytes Censys sent.
-        const body = 'text' in res && typeof res.text === 'function' ? await res.text() : (res as { body: unknown }).body;
+        const body = await res.text();
         const out = await ctx.retain(nodeId, op, { status: res.status, headers: { ...(res.headers ?? {}) }, body });
         if (out && out.kept === false) reason = typeof out.reason === 'string' && out.reason ? out.reason : 'refused';
     } catch {
@@ -483,10 +478,9 @@ export const censysSearch = definePlugin({
         const capped: string[] = [];
 
         /** One page of results. Search is a paid feature, so a 403 ends the run rather than an item. */
-        const search = async (q: string): Promise<{ result: any; res: SafeResponse }> => {
+        const search = async (q: string): Promise<any> => {
             try {
-                const reply = await censys(ctx, 'POST', '/search/query', { query: q, page_size: limit });
-                return { result: reply.json?.result, res: reply.res };
+                return (await censys(ctx, 'POST', '/search/query', { query: q, page_size: limit })).json?.result;
             } catch (e) {
                 if (e instanceof CensysError && e.status === 403) {
                     throw new Error(`Censys search needs a paid account (Starter or higher) — ${e.message}`);
@@ -499,9 +493,8 @@ export const censysSearch = definePlugin({
         ctx.progress?.set?.({ percent: 0, message: 'Running the query' });
         if (query) {
             let result: any;
-            let res: SafeResponse;
             try {
-                ({ result, res } = await search(query));
+                result = await search(query);
             } catch (e) {
                 if (e instanceof CensysError && (e.status === 400 || e.status === 422)) {
                     // The corrections are the three wrong guesses the 2026-10-07 transcripts made
@@ -515,41 +508,32 @@ export const censysSearch = definePlugin({
                 throw e;
             }
             counts.searches++;
+            // No raw results here (analyst's decision, 2026-11-25): a page describes up to 100
+            // assets, and the hit cut out of it for one node is no longer the answer Censys sent.
+            // Host Lookup keeps the original answer for an IP when one is wanted.
             const hits = hitsOf(result);
             for (const h of hits) {
                 if (ctx.signal?.aborted) throw abortErr();
                 const ip = h?.host_v1?.resource?.ip;
                 const cert = h?.certificate_v1?.resource;
                 const hostname = h?.webproperty_v1?.resource?.hostname;
-                let node: GraphNode | null = null;
                 if (typeof ip === 'string' && ip) {
-                    node = await ctx.graph!.createNode!({ type: 'infrastructure.ip_address', data: { ip_address: ip } });
+                    await ctx.graph!.createNode!({ type: 'infrastructure.ip_address', data: { ip_address: ip } });
                     counts.hosts++;
                 } else if (cert) {
                     const data = certData({ cert });
                     if (data) {
-                        node = await ctx.graph!.createNode!({ type: 'infrastructure.certificate', data });
+                        await ctx.graph!.createNode!({ type: 'infrastructure.certificate', data });
                         counts.certificates++;
                     }
                 } else if (typeof hostname === 'string' && hostname) {
                     const ipName = isIp(hostname);
-                    node = await ctx.graph!.createNode!({
+                    await ctx.graph!.createNode!({
                         type: ipName ? 'infrastructure.ip_address' : 'infrastructure.domain',
                         data: ipName ? { ip_address: hostname } : { domain_name: hostname.toLowerCase() },
                     });
                     if (ipName) counts.hosts++;
                     else counts.domains++;
-                }
-                // Each hit's own record on the node it became, never the whole page (spec §5-3): a
-                // page is up to 100 hosts, and on every one of them it would mostly describe the
-                // others. total_hits rides along as the one piece of the page that is about the
-                // query; the query itself is already in the host's call metadata.
-                if (node) {
-                    await keep(ctx, node.id, 'search', {
-                        status: res.status,
-                        headers: res.headers,
-                        body: { total_hits: result?.total_hits, hit: h },
-                    });
                 }
             }
             const total = Number(result?.total_hits ?? 0);

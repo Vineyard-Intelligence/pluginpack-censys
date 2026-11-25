@@ -373,7 +373,8 @@ const searchBody = {
 //   - Host Lookup keeps the FINAL answer for each IP on that IP's node, op "host": a 2xx, and the
 //     404/403/400/422 item misses too (the analyst keeps error answers). A retried 429 is never kept,
 //     and a run-ending error (401, throttling past the retries) keeps nothing.
-//   - Search keeps one {total_hits, hit} per created node, op "search", on the node that hit became.
+//   - Search keeps nothing (analyst's decision, 2026-11-25): a hit cut out of a page is not the
+//     answer Censys sent.
 //   - Nothing handed to retain carries the token, the organization ID, a URL or an Authorization
 //     header: the request never leaves the pack.
 //   - A refusal object or a throw from retain never fails the run, and is logged once per reason.
@@ -474,32 +475,9 @@ const bodyOf = (call) => (typeof call?.[2]?.body === "string" ? JSON.parse(call[
   const spy = retainSpy();
   const t = ctxFor({ nodes: {}, selection: [], config: SECRET_CONFIG, respond: () => ({ status: 200, body: searchBody, headers: RESPONSE_HEADERS }), params: { query: "host.services.port=8443" } });
   t.ctx.retain = spy;
-  await searchPlugin.run(t.ctx);
-  const created = t.graph.createdNodes.map((n) => n.id).join();
-  check("retain search: one call per hit, on the node that hit became", spy.calls.map((c) => c[0]).join() === created && spy.calls.length === searchBody.result.hits.length);
-  check("retain search: op search", spy.calls.every((c) => c[1] === "search"));
-  check("retain search: each body is {total_hits, hit} for its own hit", spy.calls.every((c, i) => JSON.stringify(bodyOf(c)) === JSON.stringify({ total_hits: 300, hit: searchBody.result.hits[i] })));
-  check("retain search: status and headers of the search answer", spy.calls.every((c) => c[2].status === 200 && c[2].headers.etag === '"r-1"'));
-  check("retain search: no token, organization ID, URL or Authorization header", leaks(spy.calls).length === 0);
-}
-{
-  // A certificate hit certData cannot read becomes no node, so it has nothing to be kept on.
-  const body = {
-    result: {
-      total_hits: 3,
-      hits: [
-        { certificate_v1: { resource: { parsed: { subject: { common_name: ["no-fingerprint.example"] } } } } },
-        { certificate_v1: { resource: { fingerprint_sha256: CERT_FP } } },
-        { webproperty_v1: { resource: { hostname: "Shop.Example.com" } } },
-      ],
-    },
-  };
-  const spy = retainSpy();
-  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body }), params: { query: "x" } });
-  t.ctx.retain = spy;
-  await searchPlugin.run(t.ctx);
-  check("retain search: a hit that made no node keeps nothing", spy.calls.length === 2 && spy.calls.map((c) => c[0]).join() === t.graph.createdNodes.map((n) => n.id).join());
-  check("retain search: ...and the kept hits are the ones that made nodes", bodyOf(spy.calls[0])?.hit === body.result.hits[1] || JSON.stringify(bodyOf(spy.calls[0])?.hit) === JSON.stringify(body.result.hits[1]));
+  const res = await searchPlugin.run(t.ctx);
+  check("retain search: keeps nothing, not even a slice per hit", spy.calls.length === 0);
+  check("retain search: still maps every hit", res.counts.hosts === 3 && t.graph.createdNodes.length === searchBody.result.hits.length);
 }
 {
   for (const status of [403, 422]) {
@@ -513,11 +491,16 @@ const bodyOf = (call) => (typeof call?.[2]?.body === "string" ? JSON.parse(call[
 {
   // A refusal is an object, not a throw — and either way the run carries on.
   const refuse = retainSpy(async () => ({ kept: false, reason: "over this run's raw-result budget" }));
-  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body: searchBody }), params: { query: "x" } });
+  const ips = { a: "192.0.2.1", b: "192.0.2.2", c: "192.0.2.3" };
+  const t = ctxFor({
+    nodes: Object.fromEntries(Object.entries(ips).map(([id, v]) => [id, { id, type: "infrastructure.ip_address", data: { ip_address: v } }])),
+    selection: Object.keys(ips),
+    respond: () => ({ status: 200, body: hostBody }),
+  });
   t.ctx.retain = refuse;
-  const res = await searchPlugin.run(t.ctx).catch((e) => e);
-  check("retain refusal: the search still succeeds", !(res instanceof Error) && res.counts.hosts === 3 && refuse.calls.length === 4);
-  check("retain refusal: said once, not once per hit", t.logs.filter((l) => /Raw search result not kept — over this run's raw-result budget/.test(l)).length === 1);
+  const res = await hostPlugin.run(t.ctx).catch((e) => e);
+  check("retain refusal: the lookup still succeeds", !(res instanceof Error) && res.counts.checked === 3 && refuse.calls.length === 3);
+  check("retain refusal: said once, not once per IP", t.logs.filter((l) => /Raw host result not kept — over this run's raw-result budget/.test(l)).length === 1);
 
   const thrower = retainSpy(async () => {
     throw new Error("host blew up");
@@ -534,7 +517,7 @@ const bodyOf = (call) => (typeof call?.[2]?.body === "string" ? JSON.parse(call[
 }
 {
   // The bundle is the source rebuilt: the version the update check compares moved, and only it.
-  check("pack version is 0.6.0", pack.version === "0.6.0");
+  check("pack version is 0.7.0", pack.version === "0.7.0");
   check("member versions unchanged", hostPlugin.manifest.version === "0.4.0" && searchPlugin.manifest.version === "0.4.0");
 }
 for (const n of ok) console.log(`  ok   ${n}`);
