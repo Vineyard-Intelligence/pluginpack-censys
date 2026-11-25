@@ -42,11 +42,11 @@ function makeNet(respond) {
     calls,
     async fetch(url, init) {
       calls.push({ url, init });
-      const { status, body } = respond(url, init, calls.length);
+      const { status, body, headers } = respond(url, init, calls.length);
       return {
         ok: status >= 200 && status < 300,
         status,
-        headers: {},
+        headers: headers ?? {},
         async json() {
           return body;
         },
@@ -367,6 +367,175 @@ const searchBody = {
   check("the query is a required field", Array.isArray(searchPlugin.manifest.params.required) && searchPlugin.manifest.params.required.includes("query"));
   check("the query parameter carries the CenQL summary and the reference link", /Platform syntax, not Legacy Search/.test(qd) && /host\.services\.cert\.names/.test(qd) && /https:\/\/docs\.censys\.com\/docs\/censys-query-language/.test(qd));
   check("the plugin description stays within the catalog's 1024 characters", searchPlugin.manifest.description.length <= 1024);
+}
+// ---- raw results: ctx.retain (check:retain-feature-detect) --------------------------------------
+// Invariants, from the plugin raw results spec (§5, §9-1, §12):
+//   - Host Lookup keeps the FINAL answer for each IP on that IP's node, op "host": a 2xx, and the
+//     404/403/400/422 item misses too (the analyst keeps error answers). A retried 429 is never kept,
+//     and a run-ending error (401, throttling past the retries) keeps nothing.
+//   - Search keeps one {total_hits, hit} per created node, op "search", on the node that hit became.
+//   - Nothing handed to retain carries the token, the organization ID, a URL or an Authorization
+//     header: the request never leaves the pack.
+//   - A refusal object or a throw from retain never fails the run, and is logged once per reason.
+//   - A host without ctx.retain (every desktop build before it) runs exactly as before.
+const SECRET_PAT = "pat-SECRET-token-0123456789";
+const SECRET_ORG = "org-SECRET-0123456789";
+const SECRET_CONFIG = { api_key: SECRET_PAT, organization_id: SECRET_ORG };
+const RESPONSE_HEADERS = { "content-type": "application/json", etag: '"r-1"', "x-request-id": "rq-1" };
+
+function retainSpy(answer = async () => ({ kept: true })) {
+  const calls = [];
+  const fn = async (...args) => {
+    calls.push(args);
+    return answer(...args);
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+/** Everything a retain call was given, as one string to search for what must not be there. */
+const dumped = (calls) => JSON.stringify(calls);
+const leaks = (calls) => {
+  const s = dumped(calls);
+  return [SECRET_PAT, SECRET_ORG, "Bearer", "Authorization", "X-Organization-ID", "http://", "https://", "api.platform.censys.io"].filter((x) => s.includes(x));
+};
+const bodyOf = (call) => (typeof call?.[2]?.body === "string" ? JSON.parse(call[2].body) : call?.[2]?.body);
+
+{
+  const nodes = { ip1: { id: "ip1", type: "infrastructure.ip_address", data: { ip_address: "198.51.100.7" } } };
+  const spy = retainSpy();
+  const t = ctxFor({ nodes, selection: ["ip1"], config: SECRET_CONFIG, respond: () => ({ status: 200, body: hostBody, headers: RESPONSE_HEADERS }) });
+  t.ctx.retain = spy;
+  const res = await hostPlugin.run(t.ctx);
+  check("retain host: one call, on the looked-up IP, op host", spy.calls.length === 1 && spy.calls[0][0] === "ip1" && spy.calls[0][1] === "host");
+  check("retain host: status and the response's own headers", spy.calls[0]?.[2].status === 200 && spy.calls[0]?.[2].headers.etag === '"r-1"');
+  check("retain host: the whole answer, as the text Censys sent", typeof spy.calls[0]?.[2].body === "string" && JSON.stringify(bodyOf(spy.calls[0])) === JSON.stringify(hostBody));
+  check("retain host: a plain object, nothing a worker cannot post", spy.calls[0] && Object.keys(spy.calls[0][2]).sort().join() === "body,headers,status");
+  check("retain host: no token, organization ID, URL or Authorization header", leaks(spy.calls).length === 0);
+  check("retain host: the request really carried both secrets", t.net.calls[0].init.headers.Authorization === `Bearer ${SECRET_PAT}` && t.net.calls[0].init.headers["X-Organization-ID"] === SECRET_ORG);
+
+  // The same run on a host without retain: same graph, same counts.
+  const old = ctxFor({ nodes, selection: ["ip1"], config: SECRET_CONFIG, respond: () => ({ status: 200, body: hostBody, headers: RESPONSE_HEADERS }) });
+  const oldRes = await hostPlugin.run(old.ctx);
+  check("old host: no ctx.retain, the lookup runs as before", !("retain" in old.ctx) && JSON.stringify(oldRes) === JSON.stringify(res));
+  check("old host: says nothing about raw results", !old.logs.some((l) => /not kept/.test(l)));
+  check("old host: ...and stages the same graph", JSON.stringify(old.graph.createdNodes) === JSON.stringify(t.graph.createdNodes) && JSON.stringify(old.graph.updates) === JSON.stringify(t.graph.updates));
+  const notFn = ctxFor({ nodes, selection: ["ip1"], respond: () => ({ status: 200, body: hostBody }) });
+  notFn.ctx.retain = true;
+  const notFnRes = await hostPlugin.run(notFn.ctx).catch((e) => e);
+  check("old host: a retain that is not a function is left alone", !(notFnRes instanceof Error) && notFnRes.counts.checked === 1);
+}
+{
+  const spy = retainSpy();
+  const t = ctxFor({
+    nodes: {
+      a: { id: "a", type: "infrastructure.ip_address", data: { ip_address: "192.0.2.1" } },
+      b: { id: "b", type: "infrastructure.ip_address", data: { ip_address: "192.0.2.2" } },
+      c: { id: "c", type: "infrastructure.ip_address", data: { ip_address: "192.0.2.3" } },
+    },
+    selection: ["a", "b", "c"],
+    config: SECRET_CONFIG,
+    respond: (url) =>
+      url.endsWith("192.0.2.1")
+        ? { status: 404, body: { error: { code: 404, message: "Host not found" } } }
+        : url.endsWith("192.0.2.3")
+          ? { status: 403, body: { error: { message: "Forbidden" } } }
+          : { status: 200, body: hostBody },
+  });
+  t.ctx.retain = spy;
+  const res = await hostPlugin.run(t.ctx);
+  check("retain host: item misses are kept too, on their own IP", spy.calls.map((c) => `${c[0]}:${c[1]}:${c[2].status}`).join() === "a:host:404,b:host:200,c:host:403");
+  check("retain host: a 404 keeps Censys' own error body", bodyOf(spy.calls[0])?.error?.message === "Host not found");
+  check("retain host: misses still skip the item", res.counts.misses === 2 && res.counts.checked === 1);
+  check("retain host: no secret in a kept error answer either", leaks(spy.calls).length === 0);
+}
+{
+  const spy = retainSpy();
+  const t = ctxFor({
+    nodes: { a: { id: "a", type: "infrastructure.ip_address", data: { ip_address: "192.0.2.1" } } },
+    selection: ["a"],
+    respond: () => ({ status: 401, body: { message: "Access credentials are invalid" } }),
+  });
+  t.ctx.retain = spy;
+  await hostPlugin.run(t.ctx).catch(() => {});
+  check("retain host: a 401 ends the run and keeps nothing", spy.calls.length === 0);
+
+  const retried = retainSpy();
+  const r = ctxFor({
+    nodes: { a: { id: "a", type: "infrastructure.ip_address", data: { ip_address: "192.0.2.1" } } },
+    selection: ["a"],
+    respond: (_u, _i, n) => (n === 1 ? { status: 429, body: { throttled: true } } : { status: 200, body: hostBody }),
+  });
+  r.ctx.retain = retried;
+  await hostPlugin.run(r.ctx);
+  check("retain host: a retried 429 is not kept, only the final answer", retried.calls.length === 1 && retried.calls[0][2].status === 200);
+}
+{
+  const spy = retainSpy();
+  const t = ctxFor({ nodes: {}, selection: [], config: SECRET_CONFIG, respond: () => ({ status: 200, body: searchBody, headers: RESPONSE_HEADERS }), params: { query: "host.services.port=8443" } });
+  t.ctx.retain = spy;
+  await searchPlugin.run(t.ctx);
+  const created = t.graph.createdNodes.map((n) => n.id).join();
+  check("retain search: one call per hit, on the node that hit became", spy.calls.map((c) => c[0]).join() === created && spy.calls.length === searchBody.result.hits.length);
+  check("retain search: op search", spy.calls.every((c) => c[1] === "search"));
+  check("retain search: each body is {total_hits, hit} for its own hit", spy.calls.every((c, i) => JSON.stringify(bodyOf(c)) === JSON.stringify({ total_hits: 300, hit: searchBody.result.hits[i] })));
+  check("retain search: status and headers of the search answer", spy.calls.every((c) => c[2].status === 200 && c[2].headers.etag === '"r-1"'));
+  check("retain search: no token, organization ID, URL or Authorization header", leaks(spy.calls).length === 0);
+}
+{
+  // A certificate hit certData cannot read becomes no node, so it has nothing to be kept on.
+  const body = {
+    result: {
+      total_hits: 3,
+      hits: [
+        { certificate_v1: { resource: { parsed: { subject: { common_name: ["no-fingerprint.example"] } } } } },
+        { certificate_v1: { resource: { fingerprint_sha256: CERT_FP } } },
+        { webproperty_v1: { resource: { hostname: "Shop.Example.com" } } },
+      ],
+    },
+  };
+  const spy = retainSpy();
+  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body }), params: { query: "x" } });
+  t.ctx.retain = spy;
+  await searchPlugin.run(t.ctx);
+  check("retain search: a hit that made no node keeps nothing", spy.calls.length === 2 && spy.calls.map((c) => c[0]).join() === t.graph.createdNodes.map((n) => n.id).join());
+  check("retain search: ...and the kept hits are the ones that made nodes", bodyOf(spy.calls[0])?.hit === body.result.hits[1] || JSON.stringify(bodyOf(spy.calls[0])?.hit) === JSON.stringify(body.result.hits[1]));
+}
+{
+  for (const status of [403, 422]) {
+    const spy = retainSpy();
+    const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status, body: { error: { message: "no" } } }), params: { query: "x" } });
+    t.ctx.retain = spy;
+    await searchPlugin.run(t.ctx).catch(() => {});
+    check(`retain search: a run-ending ${status} keeps nothing`, spy.calls.length === 0);
+  }
+}
+{
+  // A refusal is an object, not a throw — and either way the run carries on.
+  const refuse = retainSpy(async () => ({ kept: false, reason: "over this run's raw-result budget" }));
+  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body: searchBody }), params: { query: "x" } });
+  t.ctx.retain = refuse;
+  const res = await searchPlugin.run(t.ctx).catch((e) => e);
+  check("retain refusal: the search still succeeds", !(res instanceof Error) && res.counts.hosts === 3 && refuse.calls.length === 4);
+  check("retain refusal: said once, not once per hit", t.logs.filter((l) => /Raw search result not kept — over this run's raw-result budget/.test(l)).length === 1);
+
+  const thrower = retainSpy(async () => {
+    throw new Error("host blew up");
+  });
+  const h = ctxFor({
+    nodes: { ip1: { id: "ip1", type: "infrastructure.ip_address", data: { ip_address: "198.51.100.7" } } },
+    selection: ["ip1"],
+    respond: () => ({ status: 200, body: hostBody }),
+  });
+  h.ctx.retain = thrower;
+  const hres = await hostPlugin.run(h.ctx).catch((e) => e);
+  check("retain throw: the lookup still succeeds with everything mapped", !(hres instanceof Error) && hres.counts.checked === 1 && hres.counts.certificates === 1 && hres.counts.host_keys === 2);
+  check("retain throw: logged without the host's message", h.logs.some((l) => /Raw host result not kept/.test(l)) && !h.logs.some((l) => /blew up/.test(l)));
+}
+{
+  // The bundle is the source rebuilt: the version the update check compares moved, and only it.
+  check("pack version is 0.6.0", pack.version === "0.6.0");
+  check("member versions unchanged", hostPlugin.manifest.version === "0.4.0" && searchPlugin.manifest.version === "0.4.0");
 }
 for (const n of ok) console.log(`  ok   ${n}`);
 for (const n of fail) console.log(`  FAIL ${n}`);

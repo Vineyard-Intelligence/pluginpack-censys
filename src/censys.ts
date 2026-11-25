@@ -27,13 +27,14 @@ import type {
     NetworkScope,
     PluginManifest,
     RunResult,
+    SafeResponse,
     VineyardPluginPack,
 } from './sdk';
 
 const API = 'https://api.platform.censys.io/v3/global';
 // Two versions: an installed project is offered an update by the PACK's version alone, so a change
 // to the pack document bumps only PACK_VERSION; PLUGIN_VERSION moves when a plugin changes.
-const PACK_VERSION = '0.5.0';
+const PACK_VERSION = '0.6.0';
 const PLUGIN_VERSION = '0.4.0';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
@@ -79,22 +80,33 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
         signal?.addEventListener('abort', onAbort, { once: true });
     });
 
-/** A non-2xx answer that may be about one item rather than the whole run. */
+/** A non-2xx answer that may be about one item rather than the whole run. `res` is that final
+ *  answer, so an item miss can still be kept as evidence (see keep). */
 class CensysError extends Error {
     constructor(
         readonly status: number,
         msg: string,
+        readonly res?: SafeResponse,
     ) {
         super(`${msg} (HTTP ${status})`);
     }
+}
+
+/** A 2xx answer: the parsed body, and the response it came from for keep(). */
+interface CensysReply {
+    json: any;
+    res: SafeResponse;
 }
 
 /**
  * One call with the analyst's token. 429 (the account's one-request-at-a-time limit) and 503 (the
  * per-IP rate limit) are retried with backoff; 401 ends the run, since every later call would fail
  * the same way. Everything else comes back as a CensysError for the caller to judge.
+ *
+ * Only the FINAL response leaves here, in the reply or on the CensysError: a throttled 429/503
+ * that was retried says nothing about the host and must never be kept in place of the answer.
  */
-async function censys(ctx: HostContext, method: 'GET' | 'POST', path: string, body?: unknown): Promise<any> {
+async function censys(ctx: HostContext, method: 'GET' | 'POST', path: string, body?: unknown): Promise<CensysReply> {
     if (ctx.run?.platform && ctx.run.platform !== 'desktop') {
         throw new Error('Censys sends no CORS headers — this pack only works in the VINEYARD desktop app');
     }
@@ -120,7 +132,7 @@ async function censys(ctx: HostContext, method: 'GET' | 'POST', path: string, bo
             await sleep(wait, ctx.signal);
             continue;
         }
-        if (res.ok) return res.json();
+        if (res.ok) return { json: await res.json(), res };
         let msg = '';
         try {
             const j = (await res.json()) as any;
@@ -147,8 +159,46 @@ async function censys(ctx: HostContext, method: 'GET' | 'POST', path: string, bo
             /* non-JSON error body — the status line has to do */
         }
         if (res.status === 401) throw new Error('Censys rejected this Personal Access Token');
-        throw new CensysError(res.status, msg || 'Censys error');
+        throw new CensysError(res.status, msg || 'Censys error', res);
     }
+}
+
+/** Refusals already logged in this run, so a budget refusal over 100 hits is one line, not 100. */
+const keepNoted = new WeakMap<HostContext, Set<string>>();
+
+/**
+ * Keep a call's raw answer on the node it describes (plugin raw results, spec §5). Every call site
+ * goes through here, for three reasons:
+ *   - desktop builds before ctx.retain have none, and a bare call there is a TypeError that would
+ *     fail a run that otherwise works, so the check is `typeof`, not truthiness;
+ *   - only status, response headers and body are handed over, built afresh: nothing about the
+ *     request (the URL, the Bearer token, the X-Organization-ID header) can ride along on a
+ *     response object the host would have to trust;
+ *   - a refusal (over budget, a config value seen in the body) or a throw costs the raw copy, never
+ *     the run: the mapped fields are already staged and are what the analyst ran this for.
+ */
+async function keep(
+    ctx: HostContext,
+    nodeId: string,
+    op: string,
+    res: SafeResponse | { status: number; headers?: Record<string, string>; body: unknown },
+): Promise<void> {
+    if (typeof ctx.retain !== 'function') return;
+    let reason = '';
+    try {
+        // The response's own text, not a re-serialised parse, so the host hashes the bytes Censys sent.
+        const body = 'text' in res && typeof res.text === 'function' ? await res.text() : (res as { body: unknown }).body;
+        const out = await ctx.retain(nodeId, op, { status: res.status, headers: { ...(res.headers ?? {}) }, body });
+        if (out && out.kept === false) reason = typeof out.reason === 'string' && out.reason ? out.reason : 'refused';
+    } catch {
+        reason = 'the host could not keep it';
+    }
+    if (!reason) return;
+    let noted = keepNoted.get(ctx);
+    if (!noted) keepNoted.set(ctx, (noted = new Set()));
+    if (noted.has(`${op}\0${reason}`)) return;
+    noted.add(`${op}\0${reason}`);
+    ctx.progress?.log?.(`Raw ${op} result not kept — ${reason}`);
 }
 
 /** Why this one item was skipped, or null when the error has to end the run. */
@@ -304,16 +354,22 @@ export const censysHostLookup = definePlugin({
             const n = nodes[i];
             const ip = String(n.data.ip_address ?? '').trim();
             ctx.progress?.set?.({ percent: Math.round((i / nodes.length) * 100), message: `Looking up ${ip}` });
-            let host: any;
+            let reply: CensysReply;
             try {
-                host = (await censys(ctx, 'GET', `/asset/host/${encodeURIComponent(ip)}`))?.result?.resource;
+                reply = await censys(ctx, 'GET', `/asset/host/${encodeURIComponent(ip)}`);
             } catch (e) {
                 const why = itemMiss(e);
                 if (!why) throw e;
+                // Kept too (analyst's decision, 2026-11-25): "Censys had no record of this IP on this
+                // date" is itself a finding. A run-ending error (401, throttling past the retries)
+                // is about the account, not the IP, and is not kept.
+                if (e instanceof CensysError && e.res) await keep(ctx, n.id, 'host', e.res);
                 counts.misses++;
                 ctx.progress?.log?.(`${ip}: ${why}`);
                 continue;
             }
+            await keep(ctx, n.id, 'host', reply.res);
+            const host = reply.json?.result?.resource;
             counts.checked++;
             const services: any[] = Array.isArray(host?.services) ? host.services : [];
 
@@ -427,9 +483,10 @@ export const censysSearch = definePlugin({
         const capped: string[] = [];
 
         /** One page of results. Search is a paid feature, so a 403 ends the run rather than an item. */
-        const search = async (q: string): Promise<any> => {
+        const search = async (q: string): Promise<{ result: any; res: SafeResponse }> => {
             try {
-                return (await censys(ctx, 'POST', '/search/query', { query: q, page_size: limit }))?.result;
+                const reply = await censys(ctx, 'POST', '/search/query', { query: q, page_size: limit });
+                return { result: reply.json?.result, res: reply.res };
             } catch (e) {
                 if (e instanceof CensysError && e.status === 403) {
                     throw new Error(`Censys search needs a paid account (Starter or higher) — ${e.message}`);
@@ -442,8 +499,9 @@ export const censysSearch = definePlugin({
         ctx.progress?.set?.({ percent: 0, message: 'Running the query' });
         if (query) {
             let result: any;
+            let res: SafeResponse;
             try {
-                result = await search(query);
+                ({ result, res } = await search(query));
             } catch (e) {
                 if (e instanceof CensysError && (e.status === 400 || e.status === 422)) {
                     // The corrections are the three wrong guesses the 2026-10-07 transcripts made
@@ -463,23 +521,35 @@ export const censysSearch = definePlugin({
                 const ip = h?.host_v1?.resource?.ip;
                 const cert = h?.certificate_v1?.resource;
                 const hostname = h?.webproperty_v1?.resource?.hostname;
+                let node: GraphNode | null = null;
                 if (typeof ip === 'string' && ip) {
-                    await ctx.graph!.createNode!({ type: 'infrastructure.ip_address', data: { ip_address: ip } });
+                    node = await ctx.graph!.createNode!({ type: 'infrastructure.ip_address', data: { ip_address: ip } });
                     counts.hosts++;
                 } else if (cert) {
                     const data = certData({ cert });
                     if (data) {
-                        await ctx.graph!.createNode!({ type: 'infrastructure.certificate', data });
+                        node = await ctx.graph!.createNode!({ type: 'infrastructure.certificate', data });
                         counts.certificates++;
                     }
                 } else if (typeof hostname === 'string' && hostname) {
                     const ipName = isIp(hostname);
-                    await ctx.graph!.createNode!({
+                    node = await ctx.graph!.createNode!({
                         type: ipName ? 'infrastructure.ip_address' : 'infrastructure.domain',
                         data: ipName ? { ip_address: hostname } : { domain_name: hostname.toLowerCase() },
                     });
                     if (ipName) counts.hosts++;
                     else counts.domains++;
+                }
+                // Each hit's own record on the node it became, never the whole page (spec §5-3): a
+                // page is up to 100 hosts, and on every one of them it would mostly describe the
+                // others. total_hits rides along as the one piece of the page that is about the
+                // query; the query itself is already in the host's call metadata.
+                if (node) {
+                    await keep(ctx, node.id, 'search', {
+                        status: res.status,
+                        headers: res.headers,
+                        body: { total_hits: result?.total_hits, hit: h },
+                    });
                 }
             }
             const total = Number(result?.total_hits ?? 0);
