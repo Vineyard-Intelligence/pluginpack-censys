@@ -242,6 +242,22 @@ export interface HostContext {
         opts?: { history?: boolean },
     ): Promise<{ kept: boolean; reason?: string }>;
 
+    /**
+     * Keep the PART of `response` that is about node `nodeId`, for an answer that describes many
+     * nodes (a search page, a batch): `pointers` are JSON Pointers into its body (`/result/hits/3`,
+     * or several, kept as an array in that order). The host cuts the excerpt, records the pointers
+     * and keeps the whole response's hash and size, so it reads as an excerpt, never as the answer.
+     * Absent on hosts that predate it: check `typeof ctx.retainExcerpt === 'function'`, and keep
+     * nothing without it (an older host's retain would keep the whole page on every node).
+     */
+    retainExcerpt?(
+        nodeId: string,
+        op: string,
+        response: SafeResponse | { status: number; headers?: Record<string, string>; body: unknown },
+        pointers: string | string[],
+        opts?: { history?: boolean },
+    ): Promise<{ kept: boolean; reason?: string }>;
+
     progress?: {
         set?(p: { percent?: number; message?: string; phase?: string }): void;
         log?(line: string): void;

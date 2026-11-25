@@ -34,7 +34,7 @@ import type {
 const API = 'https://api.platform.censys.io/v3/global';
 // Two versions: an installed project is offered an update by the PACK's version alone, so a change
 // to the pack document bumps only PACK_VERSION; PLUGIN_VERSION moves when a plugin changes.
-const PACK_VERSION = '0.7.0';
+const PACK_VERSION = '0.8.0';
 const PLUGIN_VERSION = '0.4.0';
 const RESEARCH_NOTE = 'Registered by the VINEYARD operator for academic research. It may be removed in the future.';
 const INFRA = 'run.vineyard.typepacks.infrastructure';
@@ -184,6 +184,30 @@ async function keep(ctx: HostContext, nodeId: string, op: string, res: SafeRespo
         // The response's own text, not a re-serialised parse, so the host hashes the bytes Censys sent.
         const body = await res.text();
         const out = await ctx.retain(nodeId, op, { status: res.status, headers: { ...(res.headers ?? {}) }, body });
+        if (out && out.kept === false) reason = typeof out.reason === 'string' && out.reason ? out.reason : 'refused';
+    } catch {
+        reason = 'the host could not keep it';
+    }
+    if (!reason) return;
+    let noted = keepNoted.get(ctx);
+    if (!noted) keepNoted.set(ctx, (noted = new Set()));
+    if (noted.has(`${op}\0${reason}`)) return;
+    noted.add(`${op}\0${reason}`);
+    ctx.progress?.log?.(`Raw ${op} result not kept — ${reason}`);
+}
+
+/**
+ * Keep the part of a page that is about one node (spec §5-3, analyst's decision 2026-11-25): the
+ * host cuts what `pointer` names out of the response and records that it is an excerpt, with the
+ * whole page's hash and size. Only through ctx.retainExcerpt: a host without it would keep the
+ * whole page on every node through retain, so there nothing is kept. Refusals as keep().
+ */
+async function keepExcerpt(ctx: HostContext, nodeId: string, op: string, res: SafeResponse, pointer: string): Promise<void> {
+    if (typeof ctx.retainExcerpt !== 'function') return;
+    let reason = '';
+    try {
+        const body = await res.text();
+        const out = await ctx.retainExcerpt(nodeId, op, { status: res.status, headers: { ...(res.headers ?? {}) }, body }, pointer);
         if (out && out.kept === false) reason = typeof out.reason === 'string' && out.reason ? out.reason : 'refused';
     } catch {
         reason = 'the host could not keep it';
@@ -478,9 +502,9 @@ export const censysSearch = definePlugin({
         const capped: string[] = [];
 
         /** One page of results. Search is a paid feature, so a 403 ends the run rather than an item. */
-        const search = async (q: string): Promise<any> => {
+        const search = async (q: string): Promise<CensysReply> => {
             try {
-                return (await censys(ctx, 'POST', '/search/query', { query: q, page_size: limit })).json?.result;
+                return await censys(ctx, 'POST', '/search/query', { query: q, page_size: limit });
             } catch (e) {
                 if (e instanceof CensysError && e.status === 403) {
                     throw new Error(`Censys search needs a paid account (Starter or higher) — ${e.message}`);
@@ -493,8 +517,11 @@ export const censysSearch = definePlugin({
         ctx.progress?.set?.({ percent: 0, message: 'Running the query' });
         if (query) {
             let result: any;
+            let res: SafeResponse;
             try {
-                result = await search(query);
+                const reply = await search(query);
+                result = reply.json?.result;
+                res = reply.res;
             } catch (e) {
                 if (e instanceof CensysError && (e.status === 400 || e.status === 422)) {
                     // The corrections are the three wrong guesses the 2026-10-07 transcripts made
@@ -508,33 +535,37 @@ export const censysSearch = definePlugin({
                 throw e;
             }
             counts.searches++;
-            // No raw results here (analyst's decision, 2026-11-25): a page describes up to 100
-            // assets, and the hit cut out of it for one node is no longer the answer Censys sent.
-            // Host Lookup keeps the original answer for an IP when one is wanted.
+            // Each hit is kept as an excerpt on the node it became (analyst's decision, 2026-11-25):
+            // the search is often the only answer there will be about that node, and the host marks
+            // the part as cut from this page (its pointer, the page's hash and size), so it never
+            // reads as an answer Censys gave about the node.
             const hits = hitsOf(result);
-            for (const h of hits) {
+            for (let i = 0; i < hits.length; i++) {
+                const h = hits[i];
                 if (ctx.signal?.aborted) throw abortErr();
+                let node: GraphNode | null = null;
                 const ip = h?.host_v1?.resource?.ip;
                 const cert = h?.certificate_v1?.resource;
                 const hostname = h?.webproperty_v1?.resource?.hostname;
                 if (typeof ip === 'string' && ip) {
-                    await ctx.graph!.createNode!({ type: 'infrastructure.ip_address', data: { ip_address: ip } });
+                    node = await ctx.graph!.createNode!({ type: 'infrastructure.ip_address', data: { ip_address: ip } });
                     counts.hosts++;
                 } else if (cert) {
                     const data = certData({ cert });
                     if (data) {
-                        await ctx.graph!.createNode!({ type: 'infrastructure.certificate', data });
+                        node = await ctx.graph!.createNode!({ type: 'infrastructure.certificate', data });
                         counts.certificates++;
                     }
                 } else if (typeof hostname === 'string' && hostname) {
                     const ipName = isIp(hostname);
-                    await ctx.graph!.createNode!({
+                    node = await ctx.graph!.createNode!({
                         type: ipName ? 'infrastructure.ip_address' : 'infrastructure.domain',
                         data: ipName ? { ip_address: hostname } : { domain_name: hostname.toLowerCase() },
                     });
                     if (ipName) counts.hosts++;
                     else counts.domains++;
                 }
+                if (node) await keepExcerpt(ctx, node.id, 'search', res, `/result/hits/${i}`);
             }
             const total = Number(result?.total_hits ?? 0);
             if (total > hits.length) capped.push(`query ${hits.length} of ${total}`);

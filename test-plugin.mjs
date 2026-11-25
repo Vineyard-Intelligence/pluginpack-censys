@@ -373,8 +373,9 @@ const searchBody = {
 //   - Host Lookup keeps the FINAL answer for each IP on that IP's node, op "host": a 2xx, and the
 //     404/403/400/422 item misses too (the analyst keeps error answers). A retried 429 is never kept,
 //     and a run-ending error (401, throttling past the retries) keeps nothing.
-//   - Search keeps nothing (analyst's decision, 2026-11-25): a hit cut out of a page is not the
-//     answer Censys sent.
+//   - Search keeps each hit as an EXCERPT on the node it became, through ctx.retainExcerpt only:
+//     the whole page goes to the host with the hit's pointer, and the host cuts and marks it. A host
+//     without retainExcerpt keeps nothing from a search (its retain would keep the page per node).
 //   - Nothing handed to retain carries the token, the organization ID, a URL or an Authorization
 //     header: the request never leaves the pack.
 //   - A refusal object or a throw from retain never fails the run, and is logged once per reason.
@@ -473,11 +474,53 @@ const bodyOf = (call) => (typeof call?.[2]?.body === "string" ? JSON.parse(call[
 }
 {
   const spy = retainSpy();
+  const ex = retainSpy();
   const t = ctxFor({ nodes: {}, selection: [], config: SECRET_CONFIG, respond: () => ({ status: 200, body: searchBody, headers: RESPONSE_HEADERS }), params: { query: "host.services.port=8443" } });
   t.ctx.retain = spy;
+  t.ctx.retainExcerpt = ex;
   const res = await searchPlugin.run(t.ctx);
-  check("retain search: keeps nothing, not even a slice per hit", spy.calls.length === 0);
+  const created = t.graph.createdNodes.map((n) => n.id).join();
+  check("retain search: never a whole-response retain", spy.calls.length === 0);
+  check("retain search: one excerpt per hit, on the node that hit became, op search", ex.calls.map((c) => c[0]).join() === created && ex.calls.every((c) => c[1] === "search") && ex.calls.length === searchBody.result.hits.length);
+  check("retain search: each names its own hit's pointer", ex.calls.every((c, i) => c[3] === `/result/hits/${i}`));
+  check("retain search: the host gets the whole page as Censys sent it, to cut itself", ex.calls.every((c) => typeof c[2].body === "string" && JSON.stringify(bodyOf(c)) === JSON.stringify(searchBody)));
+  check("retain search: a plain {status, headers, body}", ex.calls.every((c) => Object.keys(c[2]).sort().join() === "body,headers,status" && c[2].status === 200));
+  check("retain search: no token, organization ID, URL or Authorization header", leaks(ex.calls).length === 0);
   check("retain search: still maps every hit", res.counts.hosts === 3 && t.graph.createdNodes.length === searchBody.result.hits.length);
+
+  // A host with retain but no retainExcerpt (desktop builds before excerpts): nothing from a search.
+  const old = retainSpy();
+  const o = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body: searchBody }), params: { query: "x" } });
+  o.ctx.retain = old;
+  const oldRes = await searchPlugin.run(o.ctx);
+  check("retain search: a host without retainExcerpt keeps nothing, never the page per node", old.calls.length === 0 && oldRes.counts.hosts === 3);
+
+  // A refusal costs the excerpt, never the search, and is said once.
+  const refuse = retainSpy(async () => ({ kept: false, reason: "over this run's raw-result budget" }));
+  const r = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body: searchBody }), params: { query: "x" } });
+  r.ctx.retainExcerpt = refuse;
+  const rRes = await searchPlugin.run(r.ctx).catch((e) => e);
+  check("retain search: a refused excerpt keeps the search going", !(rRes instanceof Error) && rRes.counts.hosts === 3 && refuse.calls.length === 4);
+  check("retain search: the refusal is said once", r.logs.filter((l) => /Raw search result not kept — over this run's raw-result budget/.test(l)).length === 1);
+}
+{
+  // A certificate hit certData cannot read becomes no node, so it has nothing to be kept on; the
+  // others keep their own hit's pointer.
+  const body = {
+    result: {
+      total_hits: 3,
+      hits: [
+        { certificate_v1: { resource: { parsed: { subject: { common_name: ["no-fingerprint.example"] } } } } },
+        { certificate_v1: { resource: { fingerprint_sha256: CERT_FP } } },
+        { webproperty_v1: { resource: { hostname: "Shop.Example.com" } } },
+      ],
+    },
+  };
+  const ex = retainSpy();
+  const t = ctxFor({ nodes: {}, selection: [], respond: () => ({ status: 200, body }), params: { query: "x" } });
+  t.ctx.retainExcerpt = ex;
+  await searchPlugin.run(t.ctx);
+  check("retain search: a hit that made no node keeps nothing; the rest keep their own pointer", ex.calls.map((c) => c[3]).join() === "/result/hits/1,/result/hits/2" && ex.calls.map((c) => c[0]).join() === t.graph.createdNodes.map((n) => n.id).join());
 }
 {
   for (const status of [403, 422]) {
@@ -517,7 +560,7 @@ const bodyOf = (call) => (typeof call?.[2]?.body === "string" ? JSON.parse(call[
 }
 {
   // The bundle is the source rebuilt: the version the update check compares moved, and only it.
-  check("pack version is 0.7.0", pack.version === "0.7.0");
+  check("pack version is 0.8.0", pack.version === "0.8.0");
   check("member versions unchanged", hostPlugin.manifest.version === "0.4.0" && searchPlugin.manifest.version === "0.4.0");
 }
 for (const n of ok) console.log(`  ok   ${n}`);
