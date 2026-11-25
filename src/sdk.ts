@@ -231,8 +231,8 @@ export interface HostContext {
     /**
      * Keep a call's raw answer on the node it describes, in this plugin's own slot of the node's
      * hidden `__plugin_results` (`op` names the call, /^[a-z][a-z0-9_]{0,63}$/). The host stamps
-     * the time, versions, hash and size, cuts the body to its budget and keeps only allow-listed
-     * response headers; nothing about the request is stored. Absent on hosts that predate it, so
+     * the time, versions and content type, keeps the call's params and cuts the body to its budget;
+     * no other response header and nothing about the request is stored. A binary body is refused. Absent on hosts that predate it, so
      * check `typeof ctx.retain === 'function'` first. A refusal resolves to `{ kept: false, reason }`.
      */
     retain?(
@@ -245,8 +245,8 @@ export interface HostContext {
     /**
      * Keep the PART of `response` that is about node `nodeId`, for an answer that describes many
      * nodes (a search page, a batch): `pointers` are JSON Pointers into its body (`/result/hits/3`,
-     * or several, kept as an array in that order). The host cuts the excerpt, records the pointers
-     * and keeps the whole response's hash and size, so it reads as an excerpt, never as the answer.
+     * or several, kept as an array in that order). The host cuts the excerpt and records the pointers, so
+     * it reads as an excerpt, never as the answer.
      * Absent on hosts that predate it: check `typeof ctx.retainExcerpt === 'function'`, and keep
      * nothing without it (an older host's retain would keep the whole page on every node).
      */

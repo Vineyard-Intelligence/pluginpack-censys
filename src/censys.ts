@@ -196,8 +196,8 @@ async function keep(ctx: HostContext, nodeId: string, op: string, res: SafeRespo
 
 /**
  * Keep the part of a page that is about one node (spec §5-3, analyst's decision 2026-11-25): the
- * host cuts what `pointer` names out of the response and records that it is an excerpt, with the
- * whole page's hash and size. Only through ctx.retainExcerpt: a host without it would keep the
+ * host cuts what `pointer` names out of the response and records that it is an excerpt, with its
+ * pointer. Only through ctx.retainExcerpt: a host without it would keep the
  * whole page on every node through retain, so there nothing is kept. Refusals as keep().
  */
 async function keepExcerpt(ctx: HostContext, nodeId: string, op: string, res: SafeResponse, pointer: string): Promise<void> {
@@ -534,7 +534,7 @@ export const censysSearch = definePlugin({
             counts.searches++;
             // Each hit is kept as an excerpt on the node it became (analyst's decision, 2026-11-25):
             // the search is often the only answer there will be about that node, and the host marks
-            // the part as cut from this page (its pointer, the page's hash and size), so it never
+            // the part as cut from this page (its pointer), so it never
             // reads as an answer Censys gave about the node.
             const hits = hitsOf(result);
             for (let i = 0; i < hits.length; i++) {
